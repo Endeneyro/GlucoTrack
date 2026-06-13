@@ -1,0 +1,105 @@
+@using GlucoTrack.Client.Models
+@using GlucoTrack.Client.Services
+@inject ToastService Toasts
+@inject DbService Db
+@inject NavigationManager Nav
+@implements IDisposable
+
+@if (Toasts.Toasts.Count > 0)
+{
+    <div class="toast-container">
+        @foreach (var toast in Toasts.Toasts.ToList())
+        {
+            var ev = toast.Event;
+            var type = (PlannedEventType)ev.EventType;
+            <div class="toast">
+                <div class="toast-head">
+                    <div>
+                        <div class="toast-title">
+                            @PlannedEventMeta.Icon(type)
+                            @PlannedEventMeta.ToastMessage(type)
+                        </div>
+                        <div class="toast-time">
+                            @ev.PlannedAtUtc.ToLocalTime().ToString("HH:mm")
+                            @if (!string.IsNullOrEmpty(ev.Note))
+                            { <span> · @ev.Note</span> }
+                        </div>
+                    </div>
+                    <button class="toast-close" @onclick="() => Toasts.Dismiss(ev.Id)">✕</button>
+                </div>
+
+                @if (type == PlannedEventType.Meal && ev.MealItems?.Count > 0)
+                {
+                    <div style="font-size:.8rem;color:var(--c-text-muted);margin-bottom:.5rem">
+                        @string.Join(", ", ev.MealItems.Select(m => $"{m.ProductName} {m.Grams:F0}г"))
+                    </div>
+                }
+
+                <div class="toast-actions">
+                    @if (type == PlannedEventType.Glucose)
+                    {
+                        <button class="btn btn-primary" @onclick="() => OpenEventPage(ev, type)">Ввести замер</button>
+                        <button class="btn btn-ghost" @onclick="() => Toasts.Dismiss(ev.Id)">Позже</button>
+                    }
+                    else if (type == PlannedEventType.Insulin)
+                    {
+                        <button class="btn btn-primary" @onclick="() => OpenEventPage(ev, type)">Ввести дозу</button>
+                        <button class="btn btn-ghost" @onclick="() => Toasts.Dismiss(ev.Id)">Позже</button>
+                    }
+                    else if (type == PlannedEventType.Meal)
+                    {
+                        <button class="btn btn-primary" @onclick="() => MarkMealDoneAsync(ev)">✓ Готово</button>
+                        <button class="btn btn-ghost" @onclick="() => Toasts.Dismiss(ev.Id)">Позже</button>
+                    }
+                    else
+                    {
+                        <button class="btn btn-primary" @onclick="() => Toasts.MarkDoneAsync(ev.Id)">✓ Выполнено</button>
+                        <button class="btn btn-ghost" @onclick="() => Toasts.Dismiss(ev.Id)">Позже</button>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    protected override void OnInitialized()
+        => Toasts.OnChanged += Refresh;
+
+    private void Refresh() => InvokeAsync(StateHasChanged);
+
+    private void OpenEventPage(PlannedEventDto ev, PlannedEventType type)
+    {
+        Toasts.Dismiss(ev.Id);
+        var url = type switch
+        {
+            PlannedEventType.Glucose => $"/glucose?eventId={ev.Id}",
+            PlannedEventType.Insulin => $"/insulin?eventId={ev.Id}",
+            PlannedEventType.Weight  => "/settings",
+            _ => "/"
+        };
+        Nav.NavigateTo(url);
+    }
+
+    private async Task MarkMealDoneAsync(PlannedEventDto ev)
+    {
+        if (ev.MealItems?.Count > 0)
+        {
+            foreach (var item in ev.MealItems)
+            {
+                var dto = new GlucoTrack.Shared.DTOs.Sync.MealEntryDto(
+                    Guid.NewGuid(),
+                    DateOnly.FromDateTime(ev.PlannedAtUtc.ToLocalTime()),
+                    TimeOnly.FromDateTime(ev.PlannedAtUtc.ToLocalTime()),
+                    (int)GlucoTrack.Shared.Entities.MealType.Snack,
+                    item.ProductId, item.Grams,
+                    DateTime.UtcNow, false,
+                    LinkedEventId: ev.Id);
+                await Db.PutAsync("meals", dto, pending: true);
+            }
+        }
+        await Toasts.MarkDoneAsync(ev.Id);
+    }
+
+    public void Dispose() => Toasts.OnChanged -= Refresh;
+}

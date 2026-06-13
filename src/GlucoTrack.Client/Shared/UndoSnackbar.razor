@@ -1,0 +1,18 @@
+@inject UndoService Undo
+@implements IDisposable
+
+@if (Undo.Current is not null)
+{
+    <div class="undo-snackbar">
+        <span>@Undo.Current.Label</span>
+        <button class="undo-btn" @onclick="UndoAsync">Отменить</button>
+        <button class="undo-close" @onclick="Undo.Dismiss">✕</button>
+    </div>
+}
+
+@code {
+    protected override void OnInitialized() => Undo.OnChanged += Refresh;
+    private void Refresh() => InvokeAsync(StateHasChanged);
+    private async Task UndoAsync() => await Undo.UndoAsync();
+    public void Dispose() => Undo.OnChanged -= Refresh;
+}

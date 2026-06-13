@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GlucoTrack</title>
+    <base href="/" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <link href="GlucoTrack.Client.styles.css" rel="stylesheet" />
+    <link href="manifest.webmanifest" rel="manifest" />
+    <link rel="apple-touch-icon" sizes="512x512" href="icon-512.png" />
+    <link rel="apple-touch-icon" sizes="192x192" href="icon-192.png" />
+</head>
+
+<body>
+    <div id="app">
+        <div style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;font-family:sans-serif;color:#555;">
+            <div style="font-size:3rem;margin-bottom:1rem;">🍏</div>
+            <div style="font-size:1.5rem;font-weight:600;color:#16a34a;">GlucoTrack</div>
+            <div style="margin-top:0.5rem;font-size:0.9rem;">Загрузка...</div>
+        </div>
+    </div>
+
+    <div id="blazor-error-ui">
+        Произошла непредвиденная ошибка.
+        <a href="" class="reload">Перезагрузить</a>
+        <a class="dismiss">🗙</a>
+    </div>
+    <script src="js/db.js"></script>
+    <script src="_framework/blazor.webassembly.js"></script>
+    <script>if (navigator.serviceWorker) navigator.serviceWorker.register('service-worker.js');</script>
+</body>
+
+</html>

@@ -1,0 +1,231 @@
+@page "/bolus"
+@attribute [Authorize]
+@using System.Globalization
+@using GlucoTrack.Client.Models
+@using GlucoTrack.Shared.Calculations
+@using GlucoTrack.Shared.DTOs.Sync
+@inject DbService Db
+@inject SyncService Sync
+@inject NavigationManager Nav
+
+<PageTitle>Калькулятор болюса — GlucoTrack</PageTitle>
+
+<div class="page">
+    <div class="page-header"><h2>🧮 Калькулятор болюса</h2></div>
+
+    @if (_prefillNote is not null)
+    {
+        <div style="background:#EFF6FF;border:1.5px solid #BFDBFE;border-radius:var(--r-md);padding:.6rem .875rem;font-size:.82rem;color:#1e40af;margin-bottom:1rem">
+            📋 @_prefillNote
+        </div>
+    }
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;align-items:start">
+        <div>
+            <div class="form-card">
+                <h4>Параметры приёма</h4>
+                <div class="form-group">
+                    <label>Углеводы (г)</label>
+                    <input class="form-control" type="number" min="0" step="1" @bind="_carbs" @oninput="Recalculate" />
+                </div>
+                <div class="form-group">
+                    <label>Текущая глюкоза (ммоль/л)</label>
+                    <input class="form-control" type="number" min="1" max="30" step="0.1" @bind="_glucose" @oninput="Recalculate" />
+                </div>
+                <div class="form-group">
+                    <label>Гликемический индекс продуктов</label>
+                    <select class="form-control" @bind="_giCategory">
+                        <option value="0">Не указан</option>
+                        <option value="1">🟢 Низкий ГИ ≤55 (овощи, бобовые, цельнозерновые)</option>
+                        <option value="2">🟡 Средний ГИ 56–69 (рис, макароны, бананы)</option>
+                        <option value="3">🔴 Высокий ГИ ≥70 (картофель, белый хлеб, печенье, сахар)</option>
+                    </select>
+                </div>
+                @if (_giCategory == 3)
+                {
+                    <div style="background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:var(--r-md);padding:.65rem .875rem;font-size:.82rem;color:#92400E">
+                        ⏱ <strong>Высокий ГИ:</strong> введите инсулин за <strong>15–25 минут до еды</strong>.
+                        Сахар поднимется быстро — инсулин должен успеть «развернуться».
+                        @if (_glucose is >= 5.5 and <= 6.5)
+                        {
+                            <div style="margin-top:.25rem">Сахар в норме — пауза 20 мин.</div>
+                        }
+                        else if (_glucose > 6.5)
+                        {
+                            <div style="margin-top:.25rem">Сахар повышен — паузу можно увеличить до 25–30 мин.</div>
+                        }
+                    </div>
+                }
+                else if (_giCategory == 1 && _carbs > 0)
+                {
+                    <div style="background:#DCFCE7;border:1.5px solid #86EFAC;border-radius:var(--r-md);padding:.65rem .875rem;font-size:.82rem;color:#166534">
+                        ✅ <strong>Низкий ГИ:</strong> можно вводить инсулин непосредственно перед едой.
+                    </div>
+                }
+
+                @if (_coeffs.Count > 0)
+                {
+                    <div class="form-group">
+                        <label>Коэффициент для времени суток</label>
+                        <select class="form-control" @bind="_selectedCoeffId" @bind:after="Recalculate">
+                            @foreach (var c in _coeffs)
+                            {
+                                <option value="@c.Id">@c.FromTime.ToString("HH:mm")–@c.ToTime.ToString("HH:mm") · IC @c.InsulinToCarbRatio · ISF @c.InsulinSensitivityFactor</option>
+                            }
+                        </select>
+                    </div>
+                }
+                else
+                {
+                    <div class="alert alert-error">
+                        Коэффициенты не настроены. <a href="/settings">Перейти в Настройки →</a>
+                    </div>
+                }
+
+                @if (_coeffs.Count > 0)
+                {
+                    <div style="display:flex;gap:.5rem;margin-top:1rem">
+                        <div class="form-group" style="flex:1;margin-bottom:0">
+                            <label style="font-size:.78rem;color:var(--text-muted)">IC</label>
+                            <div style="font-weight:600">@SelectedCoeff?.InsulinToCarbRatio г/ЕД</div>
+                        </div>
+                        <div class="form-group" style="flex:1;margin-bottom:0">
+                            <label style="font-size:.78rem;color:var(--text-muted)">ISF</label>
+                            <div style="font-weight:600">@SelectedCoeff?.InsulinSensitivityFactor ммоль/ЕД</div>
+                        </div>
+                        <div class="form-group" style="flex:1;margin-bottom:0">
+                            <label style="font-size:.78rem;color:var(--text-muted)">Цель</label>
+                            <div style="font-weight:600">@_targetGlucose ммоль/л</div>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div>
+            @if (_result is not null)
+            {
+                <div class="bolus-result">
+                    <div style="font-size:.875rem;color:var(--text-muted);margin-bottom:.5rem">Итоговая доза</div>
+                    <div class="bolus-total">@_result.TotalDose.ToString("F1")</div>
+                    <div class="bolus-unit">ЕД инсулина</div>
+                    <div class="bolus-breakdown">
+                        <div class="bolus-part">
+                            <div class="bolus-part-value @(_result.MealDose > 0 ? "" : "")">@_result.MealDose.ToString("F2")</div>
+                            <div class="bolus-part-label">На еду</div>
+                        </div>
+                        <div class="bolus-part">
+                            <div class="bolus-part-value" style="color:@(_result.CorrectionDose >= 0 ? "#f59e0b" : "var(--primary)")">
+                                @(_result.CorrectionDose >= 0 ? "+" : "")@_result.CorrectionDose.ToString("F2")
+                            </div>
+                            <div class="bolus-part-label">Коррекция</div>
+                        </div>
+                    </div>
+                </div>
+
+                @if (_result.TotalDose == 0 && _result.CorrectionDose < 0)
+                {
+                    <div class="alert alert-error" style="margin-bottom:1rem">
+                        ⚠️ Глюкоза ниже или близко к цели — инсулин не рекомендован.
+                        Рассмотрите приём медленных углеводов.
+                    </div>
+                }
+
+                <button class="btn btn-primary" style="width:100%" @onclick="LogInjectionAsync" disabled="@(_result.TotalDose <= 0 || _logged)">
+                    @(_logged ? "✓ Записано в журнал" : "Записать в журнал инсулина")
+                </button>
+            }
+            else
+            {
+                <div class="bolus-result" style="border-style:dashed;opacity:.5">
+                    <div style="font-size:2rem">🧮</div>
+                    <div style="margin-top:.5rem;color:var(--text-muted)">Введите данные слева</div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="disclaimer-box" style="margin-top:1.5rem">
+        <strong>⚠️ Важно:</strong> Расчёт носит вспомогательный характер.
+        Решение о дозировке принимайте совместно с эндокринологом.
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromQuery] public string? Carbs    { get; set; }
+    [SupplyParameterFromQuery] public string? Glucose  { get; set; }
+    [SupplyParameterFromQuery] public string? EventId  { get; set; }
+
+    private double _carbs = 0, _glucose = 6.0, _targetGlucose = 6.0;
+    private int _giCategory = 0; // 0=unknown 1=low 2=medium 3=high
+    private Guid _selectedCoeffId = Guid.Empty;
+    private List<TherapyCoeffDto> _coeffs = [];
+    private BolusResult? _result;
+    private bool _logged;
+    private string? _prefillNote; // shown when values are pre-filled from a plan
+
+    private TherapyCoeffDto? SelectedCoeff =>
+        _coeffs.FirstOrDefault(c => c.Id == _selectedCoeffId);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _coeffs = (await Db.GetAllAsync<TherapyCoeffDto>("therapy"))
+            .Where(c => !c.IsDeleted).OrderBy(c => c.FromTime).ToList();
+
+        var now = TimeOnly.FromDateTime(DateTime.Now);
+        var match = _coeffs.FirstOrDefault(c => now >= c.FromTime && now < c.ToTime)
+                    ?? _coeffs.FirstOrDefault();
+        if (match is not null) _selectedCoeffId = match.Id;
+
+        var settings = (await Db.GetAllAsync<GlucoTrack.Shared.DTOs.Sync.UserSettingsDto>("settings"))
+            .FirstOrDefault();
+        if (settings is not null) _targetGlucose = settings.TargetGlucose;
+
+        // Pre-fill from query params (called from planned insulin event)
+        var notes = new List<string>();
+        if (double.TryParse(Carbs, NumberStyles.Any, CultureInfo.InvariantCulture, out var c) && c > 0)
+        { _carbs = c; notes.Add($"углеводы из плана: {c:F0} г"); }
+        if (double.TryParse(Glucose, NumberStyles.Any, CultureInfo.InvariantCulture, out var g) && g > 0)
+        { _glucose = g; notes.Add($"глюкоза: {g:F1} ммоль/л"); }
+        if (notes.Count > 0) _prefillNote = "Предзаполнено: " + string.Join(", ", notes);
+
+        Recalculate();
+    }
+
+    private void Recalculate()
+    {
+        var coeff = SelectedCoeff;
+        if (coeff is null || _glucose <= 0 || coeff.InsulinToCarbRatio <= 0 || coeff.InsulinSensitivityFactor <= 0)
+        { _result = null; return; }
+
+        _result = BolusCalculator.Calculate(_carbs, _glucose, _targetGlucose,
+            coeff.InsulinToCarbRatio, coeff.InsulinSensitivityFactor);
+    }
+
+    private async Task LogInjectionAsync()
+    {
+        if (_result is null || _result.TotalDose <= 0) return;
+        var dto = new InsulinInjectionDto(
+            Guid.NewGuid(), DateTime.UtcNow, _result.TotalDose,
+            InsulinType: (int)GlucoTrack.Shared.Entities.InsulinType.Bolus,
+            Carbs: _carbs > 0 ? _carbs : null,
+            GlucoseBefore: _glucose,
+            DateTime.UtcNow, IsDeleted: false);
+        await Db.PutAsync("insulin", dto, pending: true);
+
+        // Mark the linked planned event as done
+        if (Guid.TryParse(EventId, out var evId))
+        {
+            var events = await Db.GetAllAsync<PlannedEventDto>("planned_events");
+            var ev = events.FirstOrDefault(e => e.Id == evId);
+            if (ev is not null)
+                await Db.PutAsync("planned_events", ev with { IsDone = true, UpdatedAtUtc = DateTime.UtcNow }, pending: false);
+        }
+
+        _ = Sync.SyncAsync();
+        _logged = true;
+
+        if (!string.IsNullOrEmpty(EventId))
+            Nav.NavigateTo("/calendar");
+    }
+}

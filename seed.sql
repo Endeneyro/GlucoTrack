@@ -1,0 +1,1 @@
+﻿INSERT INTO "InviteCodes"("Id","Code","CreatedByUserId","CreatedAtUtc") VALUES (gen_random_uuid(), 'WELCOME2024', '00000000-0000-0000-0000-000000000000', NOW());

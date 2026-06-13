@@ -1,0 +1,13 @@
+@attribute [Authorize]
+
+<div class="placeholder-page">
+    <div class="placeholder-icon">@Icon</div>
+    <h2>@Title</h2>
+    <p>Раздел в разработке. Скоро здесь появится функционал.</p>
+    <a href="/" class="btn btn-secondary">← На главную</a>
+</div>
+
+@code {
+    [Parameter] public string Icon { get; set; } = "🚧";
+    [Parameter] public string Title { get; set; } = "Раздел";
+}

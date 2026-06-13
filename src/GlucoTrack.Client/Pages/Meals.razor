@@ -1,0 +1,318 @@
+@page "/meals"
+@attribute [Authorize]
+@using GlucoTrack.Shared.DTOs.Sync
+@using GlucoTrack.Shared.Entities
+@using GlucoTrack.Shared.Calculations
+@inject DbService Db
+@inject SyncService Sync
+@inject ConfirmService Confirm
+@inject UndoService Undo
+
+<PageTitle>Питание — GlucoTrack</PageTitle>
+
+<div class="page">
+    <div class="page-header">
+        <h2>🥗 Дневник питания</h2>
+        <button class="btn btn-primary btn-sm" @onclick="() => _showAddMeal = !_showAddMeal">
+            @(_showAddMeal ? "Отмена" : "+ Добавить приём")
+        </button>
+    </div>
+
+    <!-- Date navigation -->
+    <div class="date-nav">
+        <button @onclick="PrevDay">◀</button>
+        <span class="date-display">@_date.ToString("dd MMMM", new System.Globalization.CultureInfo("ru-RU"))</span>
+        <button @onclick="NextDay">▶</button>
+        <button class="btn btn-ghost btn-sm" @onclick="GoToday">Сегодня</button>
+    </div>
+
+    <!-- Daily summary -->
+    @if (_dayEntries.Count > 0)
+    {
+        <div class="stats-bar" style="margin-bottom:1.5rem">
+            <div class="stat-card">
+                <div class="stat-value">@_dayCal.ToString("F0")</div>
+                <div class="stat-label">ккал</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">@_dayProt.ToString("F1")</div>
+                <div class="stat-label">Белки, г</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">@_dayFat.ToString("F1")</div>
+                <div class="stat-label">Жиры, г</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">@_dayCarbs.ToString("F1")</div>
+                <div class="stat-label">Углеводы, г</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">@XeCalculator.CarbsToXe(_dayCarbs, _xeGrams).ToString("F1")</div>
+                <div class="stat-label">ХЕ</div>
+            </div>
+        </div>
+    }
+
+    <!-- Add meal form -->
+    @if (_showAddMeal)
+    {
+        <div class="form-card" style="margin-bottom:1.5rem">
+            <h4>Новый приём пищи</h4>
+            <div class="input-row" style="margin-bottom:.75rem">
+                <div class="form-group">
+                    <label>Тип приёма</label>
+                    <select class="form-control" @bind="_newMealType">
+                        <option value="@MealType.Breakfast">🌅 Завтрак</option>
+                        <option value="@MealType.Lunch">☀️ Обед</option>
+                        <option value="@MealType.Dinner">🌙 Ужин</option>
+                        <option value="@MealType.Snack">🍎 Перекус</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Время</label>
+                    <input class="form-control" type="time" value="@_newTime" @oninput="e => _newTime = e.Value?.ToString() ?? _newTime" />
+                </div>
+            </div>
+
+            <!-- Product search -->
+            <div class="form-group">
+                <label>Продукт</label>
+                <input class="form-control" type="text" placeholder="Поиск по названию..."
+                       @bind="_productSearch" @oninput="SearchProducts" />
+                @if (_searchResults.Count > 0 && _selectedProduct is null)
+                {
+                    <div class="search-results">
+                        @foreach (var p in _searchResults)
+                        {
+                            <div class="search-result-item" @onclick="() => SelectProduct(p)">
+                                <div>@p.Name</div>
+                                <div class="search-result-sub">@p.CaloriesPer100g ккал · Б @p.ProteinPer100g · Ж @p.FatPer100g · У @p.CarbsPer100g</div>
+                            </div>
+                        }
+                    </div>
+                }
+                @if (_selectedProduct is not null)
+                {
+                    <div style="margin-top:.5rem;padding:.5rem .75rem;background:var(--bg);border-radius:8px;font-size:.875rem;display:flex;justify-content:space-between;align-items:center">
+                        <span>✓ @_selectedProduct.Name</span>
+                        <a style="cursor:pointer;color:var(--text-muted)" @onclick="ClearProduct">✕</a>
+                    </div>
+                }
+            </div>
+
+            @if (_selectedProduct is null && _productSearch.Length > 2)
+            {
+                <details style="margin-bottom:.75rem">
+                    <summary style="cursor:pointer;font-size:.875rem;color:var(--primary)">+ Добавить новый продукт</summary>
+                    <div style="margin-top:.75rem">
+                        <div class="input-row" style="margin-bottom:.5rem">
+                            <div class="form-group">
+                                <label>Калории (на 100г)</label>
+                                <input class="form-control" type="number" @bind="_npCal" />
+                            </div>
+                            <div class="form-group">
+                                <label>Белки (г/100г)</label>
+                                <input class="form-control" type="number" step="0.1" @bind="_npProt" />
+                            </div>
+                        </div>
+                        <div class="input-row" style="margin-bottom:.5rem">
+                            <div class="form-group">
+                                <label>Жиры (г/100г)</label>
+                                <input class="form-control" type="number" step="0.1" @bind="_npFat" />
+                            </div>
+                            <div class="form-group">
+                                <label>Углеводы (г/100г)</label>
+                                <input class="form-control" type="number" step="0.1" @bind="_npCarbs" />
+                            </div>
+                        </div>
+                        <button class="btn btn-ghost btn-sm" @onclick="CreateAndSelectProductAsync">Создать «@_productSearch»</button>
+                    </div>
+                </details>
+            }
+
+            <div class="form-group" style="max-width:150px">
+                <label>Масса (г)</label>
+                <input class="form-control" type="number" min="1" step="1" @bind="_newGrams" />
+            </div>
+
+            @if (_selectedProduct is not null)
+            {
+                var k = _newGrams / 100.0;
+                <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:.75rem">
+                    Калории: <b>@((_selectedProduct.CaloriesPer100g * k).ToString("F0"))</b> ккал ·
+                    Б: <b>@((_selectedProduct.ProteinPer100g * k).ToString("F1"))</b> ·
+                    Ж: <b>@((_selectedProduct.FatPer100g * k).ToString("F1"))</b> ·
+                    У: <b>@((_selectedProduct.CarbsPer100g * k).ToString("F1"))</b> г
+                </div>
+            }
+
+            @if (_mealErr is not null) { <div class="alert alert-error">@_mealErr</div> }
+            <button class="btn btn-primary btn-sm" @onclick="AddMealAsync" disabled="@(_selectedProduct is null)">Добавить</button>
+        </div>
+    }
+
+    <!-- Meals grouped by type -->
+    @if (_dayEntries.Count > 0)
+    {
+        @foreach (var group in _dayEntries.GroupBy(e => (MealType)e.MealType).OrderBy(g => (int)g.Key))
+        {
+            <div class="meal-group">
+                <div class="meal-group-title">@MealTypeLabel(group.Key)</div>
+                <div class="entry-list">
+                    @foreach (var entry in group.OrderBy(e => e.Time))
+                    {
+                        var p = _productsMap.GetValueOrDefault(entry.ProductId);
+                        var k = entry.Grams / 100.0;
+                        <div class="entry-item">
+                            <div class="entry-time">@entry.Time.ToString("HH:mm")</div>
+                            <div class="entry-main">
+                                <div class="entry-value">@(p?.Name ?? "—")</div>
+                                <div class="entry-sub">
+                                    @entry.Grams г ·
+                                    @(p is not null ? $"{p.CaloriesPer100g * k:F0} ккал · Б {p.ProteinPer100g * k:F1} · Ж {p.FatPer100g * k:F1} · У {p.CarbsPer100g * k:F1} г" : "")
+                                </div>
+                            </div>
+                            <button class="btn btn-ghost btn-sm btn-icon" @onclick="() => DeleteMealAsync(entry.Id)">✕</button>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    }
+    else if (!_loading)
+    {
+        <div class="placeholder-page" style="min-height:35vh">
+            <div class="placeholder-icon">🥗</div>
+            <h2>Нет записей</h2>
+            <p>Добавьте первый приём пищи</p>
+        </div>
+    }
+</div>
+
+@code {
+    private DateOnly _date = DateOnly.FromDateTime(DateTime.Today);
+    private List<MealEntryDto> _allEntries = [], _dayEntries = [];
+    private List<ProductDto> _products = [];
+    private Dictionary<Guid, ProductDto> _productsMap = [];
+    private bool _loading = true, _showAddMeal;
+    private string? _mealErr;
+
+    // Add form
+    private MealType _newMealType = MealType.Breakfast;
+    private string _newTime = DateTime.Now.ToString("HH:mm");
+    private double _newGrams = 100;
+    private string _productSearch = "";
+    private List<ProductDto> _searchResults = [];
+    private ProductDto? _selectedProduct;
+
+    // New product form
+    private double _npCal, _npProt, _npFat, _npCarbs;
+
+    // Daily totals
+    private double _dayCal, _dayProt, _dayFat, _dayCarbs;
+    private double _xeGrams = 12;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var settings = (await Db.GetAllAsync<GlucoTrack.Shared.DTOs.Sync.UserSettingsDto>("settings")).FirstOrDefault();
+        if (settings is not null) _xeGrams = settings.XeGrams;
+        _allEntries = (await Db.GetAllAsync<MealEntryDto>("meals")).Where(m => !m.IsDeleted).ToList();
+        _products = (await Db.GetAllAsync<ProductDto>("products")).Where(p => !p.IsDeleted).ToList();
+        _productsMap = _products.ToDictionary(p => p.Id);
+        FilterDay(); _loading = false;
+    }
+
+    private void FilterDay()
+    {
+        _dayEntries = _allEntries.Where(e => e.Date == _date).ToList();
+        _dayCal = _dayProt = _dayFat = _dayCarbs = 0;
+        foreach (var e in _dayEntries)
+        {
+            if (!_productsMap.TryGetValue(e.ProductId, out var p)) continue;
+            var k = e.Grams / 100.0;
+            _dayCal += p.CaloriesPer100g * k; _dayProt += p.ProteinPer100g * k;
+            _dayFat += p.FatPer100g * k; _dayCarbs += p.CarbsPer100g * k;
+        }
+    }
+
+    private void PrevDay() { _date = _date.AddDays(-1); FilterDay(); }
+    private void NextDay() { _date = _date.AddDays(1); FilterDay(); }
+    private void GoToday() { _date = DateOnly.FromDateTime(DateTime.Today); FilterDay(); }
+
+    private void SearchProducts(ChangeEventArgs e)
+    {
+        _productSearch = e.Value?.ToString() ?? "";
+        _selectedProduct = null;
+        if (_productSearch.Length < 2) { _searchResults = []; return; }
+        _searchResults = _products
+            .Where(p => p.Name.Contains(_productSearch, StringComparison.OrdinalIgnoreCase))
+            .Take(10).ToList();
+    }
+
+    private void SelectProduct(ProductDto p)
+    {
+        _selectedProduct = p; _productSearch = p.Name; _searchResults = [];
+    }
+
+    private void ClearProduct() { _selectedProduct = null; _productSearch = ""; _searchResults = []; }
+
+    private async Task CreateAndSelectProductAsync()
+    {
+        var dto = new ProductDto(
+            Guid.NewGuid(), null, _productSearch,
+            0, 1, 0, null, 100, false, null, false, null, 0, 0,
+            null,
+            _npCal, _npProt, _npFat, _npCarbs, 0,
+            null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null, null, null, null,
+            null, null, null, null,
+            null, DateTime.UtcNow, false);
+        await Db.PutAsync("products", dto, pending: true);
+        _products.Add(dto); _productsMap[dto.Id] = dto;
+        SelectProduct(dto);
+        _ = Sync.SyncAsync();
+    }
+
+    private async Task AddMealAsync()
+    {
+        _mealErr = null;
+        if (_selectedProduct is null) { _mealErr = "Выберите продукт"; return; }
+        if (_newGrams <= 0) { _mealErr = "Масса должна быть больше 0"; return; }
+        if (!TimeOnly.TryParse(_newTime, out var time)) { _mealErr = "Неверное время"; return; }
+
+        var dto = new MealEntryDto(Guid.NewGuid(), _date, time, (int)_newMealType,
+            _selectedProduct.Id, _newGrams, DateTime.UtcNow, false);
+        await Db.PutAsync("meals", dto, pending: true);
+        _allEntries.Add(dto); FilterDay();
+        _showAddMeal = false; ClearProduct(); _newGrams = 100;
+        _ = Sync.SyncAsync();
+    }
+
+    private async Task DeleteMealAsync(Guid id)
+    {
+        var item = _allEntries.First(e => e.Id == id);
+        var prod = _productsMap.GetValueOrDefault(item.ProductId);
+        var label = $"{prod?.Name ?? "Продукт"} {item.Grams:F0} г";
+        if (!await Confirm.ConfirmAsync("Удалить запись?", label)) return;
+
+        await Db.PutAsync("meals", item with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow }, pending: true);
+        _allEntries.RemoveAll(e => e.Id == id); FilterDay();
+        _ = Sync.SyncAsync();
+
+        Undo.Push($"Удалено: {label}", async () =>
+        {
+            await Db.PutAsync("meals", item with { UpdatedAtUtc = DateTime.UtcNow }, pending: true);
+            _allEntries.Add(item); FilterDay();
+            _ = Sync.SyncAsync();
+            await InvokeAsync(StateHasChanged);
+        });
+    }
+
+    private static string MealTypeLabel(MealType t) => t switch
+    {
+        MealType.Breakfast => "🌅 Завтрак",
+        MealType.Lunch => "☀️ Обед",
+        MealType.Dinner => "🌙 Ужин",
+        _ => "🍎 Перекус"
+    };
+}

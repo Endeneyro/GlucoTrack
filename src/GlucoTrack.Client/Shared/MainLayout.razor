@@ -1,0 +1,78 @@
+@inherits LayoutComponentBase
+@inject AuthService Auth
+@inject JwtAuthStateProvider AuthState
+@inject NavigationManager Nav
+@inject ConnectivityService Connectivity
+@inject SyncService Sync
+
+<div class="app-shell">
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <span class="logo-icon">🍏</span>
+            <span class="logo-text">GlucoTrack</span>
+        </div>
+        <ul class="nav-menu">
+            <li><NavLink href="/" Match="NavLinkMatch.All"><span class="nav-icon">🏠</span> Главная</NavLink></li>
+            <li><NavLink href="/calendar"><span class="nav-icon">📅</span> Календарь</NavLink></li>
+            <li><NavLink href="/meals"><span class="nav-icon">🥗</span> Питание</NavLink></li>
+            <li><NavLink href="/products"><span class="nav-icon">🛒</span> Продукты</NavLink></li>
+            <li><NavLink href="/glucose"><span class="nav-icon">📈</span> Глюкоза</NavLink></li>
+            <li><NavLink href="/insulin"><span class="nav-icon">💊</span> Инсулин</NavLink></li>
+            <li><NavLink href="/bolus"><span class="nav-icon">🧮</span> Болюс</NavLink></li>
+            <li><NavLink href="/analysis"><span class="nav-icon">📊</span> Аналитика</NavLink></li>
+            <li><NavLink href="/settings"><span class="nav-icon">⚙️</span> Настройки</NavLink></li>
+        </ul>
+        <div class="sidebar-footer">
+            <div class="sync-status @(Connectivity.IsOnline ? "online" : "offline")">
+                @if (Sync.IsSyncing)
+                {
+                    <span>⟳ Синхронизация...</span>
+                }
+                else if (!Connectivity.IsOnline)
+                {
+                    <span>📵 Офлайн@(Sync.PendingCount > 0 ? $" · {Sync.PendingCount} ожид." : "")</span>
+                }
+                else if (Sync.PendingCount > 0)
+                {
+                    <span class="clickable" @onclick="ManualSyncAsync">↑ @Sync.PendingCount не синхр.</span>
+                }
+                else if (Sync.LastSyncUtc.HasValue)
+                {
+                    <span>✓ Синхронизировано</span>
+                }
+            </div>
+            <button class="btn-logout" @onclick="LogoutAsync">Выйти</button>
+        </div>
+    </nav>
+
+    <main class="main-content">
+        @Body
+    </main>
+</div>
+<ToastContainer />
+<ConfirmDialog />
+<UndoSnackbar />
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        await Connectivity.InitAsync();
+        Connectivity.OnChanged += OnConnectivityChanged;
+        Sync.OnStateChanged += OnSyncStateChanged;
+
+        if (Connectivity.IsOnline)
+            _ = Sync.SyncAsync();
+    }
+
+    private async Task ManualSyncAsync() => await Sync.SyncAsync();
+
+    private void OnConnectivityChanged() => InvokeAsync(StateHasChanged);
+    private void OnSyncStateChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task LogoutAsync()
+    {
+        await Auth.LogoutAsync();
+        AuthState.NotifyAuthChanged();
+        Nav.NavigateTo("/login");
+    }
+}

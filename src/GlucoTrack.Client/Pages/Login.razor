@@ -1,0 +1,123 @@
+@page "/login"
+@layout EmptyLayout
+@inject AuthService Auth
+@inject JwtAuthStateProvider AuthState
+@inject NavigationManager Nav
+
+<PageTitle>Войти — GlucoTrack</PageTitle>
+
+<div class="auth-wrapper">
+    <div class="auth-card">
+        <div class="auth-logo">
+            <span class="logo-icon">🍏</span>
+            <h1>GlucoTrack</h1>
+            <p class="auth-subtitle">Питание, здоровье и самочувствие</p>
+        </div>
+
+        @if (_showRegister)
+        {
+            <h2>Регистрация</h2>
+            <EditForm Model="_reg" OnValidSubmit="RegisterAsync">
+                <DataAnnotationsValidator />
+                <div class="form-group">
+                    <label>Email</label>
+                    <InputText class="form-control" @bind-Value="_reg.Email" placeholder="you@example.com" type="email" />
+                </div>
+                <div class="form-group">
+                    <label>Пароль (минимум 8 символов)</label>
+                    <InputText class="form-control" @bind-Value="_reg.Password" type="password" placeholder="••••••••" />
+                </div>
+                <div class="form-group">
+                    <label>Инвайт-код</label>
+                    <InputText class="form-control" @bind-Value="_reg.InviteCode" placeholder="Код от владельца" />
+                </div>
+                @if (_error is not null)
+                {
+                    <div class="alert alert-error">@_error</div>
+                }
+                <button class="btn btn-primary" type="submit" disabled="@_loading">
+                    @(_loading ? "Регистрация..." : "Зарегистрироваться")
+                </button>
+            </EditForm>
+            <p class="auth-switch">Уже есть аккаунт? <a @onclick="() => _showRegister = false" href="#">Войти</a></p>
+        }
+        else
+        {
+            <h2>Вход</h2>
+            <EditForm Model="_login" OnValidSubmit="LoginAsync">
+                <DataAnnotationsValidator />
+                <div class="form-group">
+                    <label>Email</label>
+                    <InputText class="form-control" @bind-Value="_login.Email" placeholder="you@example.com" type="email" />
+                </div>
+                <div class="form-group">
+                    <label>Пароль</label>
+                    <InputText class="form-control" @bind-Value="_login.Password" type="password" placeholder="••••••••" />
+                </div>
+                @if (_error is not null)
+                {
+                    <div class="alert alert-error">@_error</div>
+                }
+                <button class="btn btn-primary" type="submit" disabled="@_loading">
+                    @(_loading ? "Вход..." : "Войти")
+                </button>
+            </EditForm>
+            <p class="auth-switch">Нет аккаунта? <a @onclick="() => _showRegister = true" href="#">Зарегистрироваться</a></p>
+        }
+    </div>
+</div>
+
+@code {
+    private LoginModel _login = new();
+    private RegModel _reg = new();
+    private string? _error;
+    private bool _loading;
+    private bool _showRegister;
+
+    private async Task LoginAsync()
+    {
+        _loading = true;
+        _error = null;
+        var (ok, err) = await Auth.LoginAsync(_login.Email, _login.Password);
+        if (ok)
+        {
+            Nav.NavigateTo("/", forceLoad: true);
+            return;
+        }
+        else
+        {
+            _error = err;
+        }
+        _loading = false;
+    }
+
+    private async Task RegisterAsync()
+    {
+        _loading = true;
+        _error = null;
+        var (ok, err) = await Auth.RegisterAsync(_reg.Email, _reg.Password, _reg.InviteCode);
+        if (ok)
+        {
+            Nav.NavigateTo("/", forceLoad: true);
+            return;
+        }
+        else
+        {
+            _error = err;
+        }
+        _loading = false;
+    }
+
+    private class LoginModel
+    {
+        public string Email { get; set; } = "";
+        public string Password { get; set; } = "";
+    }
+
+    private class RegModel
+    {
+        public string Email { get; set; } = "";
+        public string Password { get; set; } = "";
+        public string InviteCode { get; set; } = "";
+    }
+}

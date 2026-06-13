@@ -1,0 +1,335 @@
+@using GlucoTrack.Client.Models
+@using GlucoTrack.Shared.DTOs.Sync
+@inject DbService Db
+@inject SyncService Sync
+
+@if (Visible)
+{
+    <div class="modal-backdrop" @onclick="OnBackdropClick">
+        <div class="modal-card" @onclick:stopPropagation="true">
+            <div class="modal-header">
+                <div>
+                    <div class="modal-title">@(IsEditMode ? "Редактировать событие" : "Запланировать")</div>
+                    <div style="font-size:.82rem;color:var(--c-text-muted)">@Date.ToString("d MMMM yyyy", _ru)</div>
+                </div>
+                <button class="modal-close" @onclick="Close">✕</button>
+            </div>
+
+            <!-- Time Picker -->
+            <div class="time-picker">
+                <div class="time-wheel">
+                    <button class="tw-btn" @onclick="IncrHour">▲</button>
+                    <div class="tw-drum" @onwheel="OnHourWheel" @onwheel:preventDefault="true">
+                        <div class="tw-track" style="transform:translateY(@(-((_hour) * 36 - 36))px)">
+                            @for (int h = 0; h < 24; h++)
+                            {
+                                var hh = h;
+                                <div class="tw-item @(hh == _hour ? "active" : "")">@hh.ToString("D2")</div>
+                            }
+                        </div>
+                    </div>
+                    <button class="tw-btn" @onclick="DecrHour">▼</button>
+                    <span class="tw-label">часы</span>
+                </div>
+
+                <span class="time-sep">:</span>
+
+                <div class="time-wheel">
+                    <button class="tw-btn" @onclick="IncrMin">▲</button>
+                    <div class="tw-drum" @onwheel="OnMinWheel" @onwheel:preventDefault="true">
+                        <div class="tw-track" style="transform:translateY(@(-((_min) * 36 - 36))px)">
+                            @for (int m = 0; m < 60; m++)
+                            {
+                                var mm = m;
+                                <div class="tw-item @(mm == _min ? "active" : "")">@mm.ToString("D2")</div>
+                            }
+                        </div>
+                    </div>
+                    <button class="tw-btn" @onclick="DecrMin">▼</button>
+                    <span class="tw-label">минуты</span>
+                </div>
+            </div>
+
+            <!-- Event type -->
+            <div class="form-group">
+                <label>Тип события</label>
+                <select class="form-control" value="@((int)_type)" @onchange="OnTypeChanged">
+                    <option value="0">🍽 Приём пищи</option>
+                    <option value="1">📈 Измерение сахара</option>
+                    <option value="2">💊 Инсулин</option>
+                    <option value="3">⚖️ Взвешивание</option>
+                    <option value="4">🏃 Физическая активность</option>
+                </select>
+            </div>
+
+            <!-- Note -->
+            <div class="form-group">
+                <label>Заметка (необязательно)</label>
+                <input class="form-control" type="text" placeholder="Например: после ужина" @bind="_note" />
+            </div>
+
+            <!-- Meal items (only for Meal type) -->
+            @if (_type == PlannedEventType.Meal)
+            {
+                <div class="form-card" style="margin-bottom:.75rem">
+                    <h4>Продукты</h4>
+                    @foreach (var item in _mealItems)
+                    {
+                        var idx = _mealItems.IndexOf(item);
+                        var prod = _allProducts.FirstOrDefault(p => p.Id == item.ProductId);
+                        var byPiece = prod?.MeasureType == 1;
+                        <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem">
+                            <div style="flex:1;font-size:.875rem">@item.ProductName</div>
+                            <input class="form-control" type="number" min="1" step="@(byPiece ? "1" : "5")" style="width:80px"
+                                   value="@item.Grams"
+                                   @onchange="e => UpdateGrams(idx, double.TryParse(e.Value?.ToString(), out var g) ? g : item.Grams)" />
+                            <span style="font-size:.8rem;color:var(--c-text-muted)">@(byPiece ? "шт" : "г")</span>
+                            <button class="btn btn-ghost btn-icon btn-sm" @onclick="() => _mealItems.RemoveAt(idx)">✕</button>
+                        </div>
+                    }
+
+                    <!-- Product search -->
+                    <div class="form-group" style="margin-bottom:.5rem">
+                        <input class="form-control" type="text" placeholder="Поиск продукта..."
+                               @bind="_productSearch" @oninput="SearchProducts" />
+                        @if (_searchResults.Count > 0)
+                        {
+                            <div class="search-results">
+                                @foreach (var p in _searchResults)
+                                {
+                                    <div class="search-result-item" @onclick="() => AddMealItem(p)">
+                                        <div>@p.Name</div>
+                                        <div class="search-result-sub">@p.CaloriesPer100g.ToString("F0") ккал · Б @p.ProteinPer100g.ToString("F1") · Ж @p.FatPer100g.ToString("F1") · У @p.CarbsPer100g.ToString("F1") г/100г</div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+
+            <!-- Insulin reminder suggestion (new meal events only) -->
+            @if (_type == PlannedEventType.Meal && !IsEditMode && _mealItems.Count > 0)
+            {
+                var mins = CalcPreBolusMinutes();
+                var giLabel = CalcGiLabel();
+                var insulinTime = new TimeOnly(_hour, _min).AddMinutes(-mins);
+                <div style="background:#F0FDF4;border:1.5px solid #86EFAC;border-radius:var(--r-md);padding:.65rem .875rem;margin-bottom:.75rem;font-size:.85rem">
+                    <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.35rem">
+                        <input type="checkbox" id="addInsulinReminder" @bind="_addInsulinReminder" style="width:16px;height:16px" />
+                        <label for="addInsulinReminder" style="margin:0;font-weight:600;cursor:pointer">
+                            💉 Добавить напоминание об инсулине
+                        </label>
+                    </div>
+                    <div style="color:#166534;padding-left:1.5rem">
+                        За <strong>@mins мин</strong> до еды — в <strong>@insulinTime.ToString("HH:mm")</strong>
+                        @if (!string.IsNullOrEmpty(giLabel))
+                        { <span style="margin-left:.35rem;font-size:.78rem;color:#4b5563">(@giLabel)</span> }
+                    </div>
+                </div>
+            }
+
+            @if (_error is not null) { <div class="alert alert-error">@_error</div> }
+
+            <div style="display:flex;gap:.5rem;justify-content:space-between;align-items:center">
+                <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_saving">
+                    @(_saving ? "Сохранение..." : (IsEditMode ? "Сохранить изменения" : "Запланировать"))
+                </button>
+                @if (IsEditMode)
+                {
+                    <button class="btn btn-danger btn-sm" @onclick="DeleteAsync" disabled="@_saving">
+                        🗑 Удалить
+                    </button>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public DateOnly Date { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnSaved { get; set; }
+    [Parameter] public PlannedEventDto? EditEvent { get; set; }
+
+    private bool IsEditMode => EditEvent is not null;
+
+    private static readonly System.Globalization.CultureInfo _ru = new("ru-RU");
+
+    private int _hour = DateTime.Now.Hour;
+    private int _min  = (DateTime.Now.Minute / 5) * 5;
+    private PlannedEventType _type = PlannedEventType.Glucose;
+    private string _note = "";
+    private string? _error;
+    private bool _saving;
+
+    // Meal items
+    private List<PlannedMealItem> _mealItems = [];
+    private List<ProductDto> _allProducts = [];
+    private List<ProductDto> _searchResults = [];
+    private string _productSearch = "";
+    private bool _addInsulinReminder = true;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Visible && _allProducts.Count == 0)
+            _allProducts = (await Db.GetAllAsync<ProductDto>("products")).Where(p => !p.IsDeleted).ToList();
+
+        if (Visible && EditEvent is not null)
+        {
+            var local = EditEvent.PlannedAtUtc.ToLocalTime();
+            _hour = local.Hour;
+            _min  = local.Minute;
+            _type = (PlannedEventType)EditEvent.EventType;
+            _note = EditEvent.Note ?? "";
+            _mealItems = EditEvent.MealItems is not null ? [..EditEvent.MealItems] : [];
+        }
+    }
+
+    // Hour wheel
+    private void IncrHour() => _hour = (_hour + 1) % 24;
+    private void DecrHour() => _hour = (_hour + 23) % 24;
+    private void OnHourWheel(WheelEventArgs e) { if (e.DeltaY > 0) DecrHour(); else IncrHour(); }
+
+    // Minute wheel
+    private void IncrMin() => _min = (_min + 5) % 60;
+    private void DecrMin() => _min = (_min + 55) % 60;
+    private void OnMinWheel(WheelEventArgs e) { if (e.DeltaY > 0) DecrMin(); else IncrMin(); }
+
+    private void OnTypeChanged(ChangeEventArgs e)
+        => _type = (PlannedEventType)int.Parse(e.Value?.ToString() ?? "0");
+
+    private void SearchProducts(ChangeEventArgs e)
+    {
+        _productSearch = e.Value?.ToString() ?? "";
+        _searchResults = _productSearch.Length < 2 ? [] :
+            _allProducts.Where(p => p.Name.Contains(_productSearch, StringComparison.OrdinalIgnoreCase))
+                        .Take(8).ToList();
+    }
+
+    private void AddMealItem(ProductDto p)
+    {
+        var defaultQty = p.MeasureType == 1 ? 1 : 100;
+        _mealItems.Add(new PlannedMealItem(p.Id, p.Name, defaultQty));
+        _productSearch = ""; _searchResults = [];
+    }
+
+    private void UpdateGrams(int idx, double g)
+    {
+        if (idx < _mealItems.Count)
+            _mealItems[idx] = _mealItems[idx] with { Grams = g };
+    }
+
+    private async Task SaveAsync()
+    {
+        _error = null;
+        if (_type == PlannedEventType.Meal && _mealItems.Count == 0)
+        { _error = "Добавьте хотя бы один продукт"; return; }
+
+        _saving = true;
+        var planned = Date.ToDateTime(new TimeOnly(_hour, _min)).ToUniversalTime();
+
+        PlannedEventDto dto;
+        if (IsEditMode)
+        {
+            dto = EditEvent! with
+            {
+                PlannedAtUtc = planned,
+                EventType    = (int)_type,
+                Note         = string.IsNullOrWhiteSpace(_note) ? null : _note,
+                MealItems    = _type == PlannedEventType.Meal ? [.._mealItems] : null,
+                UpdatedAtUtc = DateTime.UtcNow
+            };
+        }
+        else
+        {
+            dto = new PlannedEventDto(
+                Guid.NewGuid(), planned, (int)_type,
+                string.IsNullOrWhiteSpace(_note) ? null : _note,
+                null,
+                _type == PlannedEventType.Meal ? [.._mealItems] : null,
+                false, DateTime.UtcNow, false);
+        }
+
+        await Db.PutAsync("planned_events", dto, pending: false);
+
+        // Auto-create insulin reminder for new meal events
+        if (!IsEditMode && _type == PlannedEventType.Meal && _mealItems.Count > 0 && _addInsulinReminder)
+        {
+            var mins = CalcPreBolusMinutes();
+            var insulinTime = planned.AddMinutes(-mins);
+            var insulinDto = new PlannedEventDto(
+                Guid.NewGuid(), insulinTime, (int)PlannedEventType.Insulin,
+                $"Болюс перед едой", null, null, false, DateTime.UtcNow, false);
+            await Db.PutAsync("planned_events", insulinDto, pending: false);
+        }
+
+        _ = Sync.SyncAsync();
+        _saving = false;
+        Reset();
+        await OnSaved.InvokeAsync();
+        await OnClose.InvokeAsync();
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (EditEvent is null) return;
+        _saving = true;
+        await Db.PutAsync("planned_events",
+            EditEvent with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow },
+            pending: false);
+        _ = Sync.SyncAsync();
+        _saving = false;
+        Reset();
+        await OnSaved.InvokeAsync();
+        await OnClose.InvokeAsync();
+    }
+
+    private int CalcPreBolusMinutes()
+    {
+        double giNum = 0, giDen = 0;
+        foreach (var item in _mealItems)
+        {
+            var prod = _allProducts.FirstOrDefault(p => p.Id == item.ProductId);
+            if (prod?.GlycemicIndex is not null)
+            {
+                var carbs = prod.CarbsPer100g * item.Grams / 100.0;
+                giNum += prod.GlycemicIndex.Value * carbs;
+                giDen += carbs;
+            }
+        }
+        if (giDen <= 0) return 15;
+        var gi = giNum / giDen;
+        return gi >= 70 ? 20 : gi >= 56 ? 12 : 5;
+    }
+
+    private string CalcGiLabel()
+    {
+        double giNum = 0, giDen = 0;
+        foreach (var item in _mealItems)
+        {
+            var prod = _allProducts.FirstOrDefault(p => p.Id == item.ProductId);
+            if (prod?.GlycemicIndex is not null)
+            {
+                var carbs = prod.CarbsPer100g * item.Grams / 100.0;
+                giNum += prod.GlycemicIndex.Value * carbs;
+                giDen += carbs;
+            }
+        }
+        if (giDen <= 0) return "";
+        var gi = giNum / giDen;
+        return gi >= 70 ? $"ГИ {gi:F0} — высокий" : gi >= 56 ? $"ГИ {gi:F0} — средний" : $"ГИ {gi:F0} — низкий";
+    }
+
+    private void Reset()
+    {
+        _note = ""; _error = null; _mealItems = []; _productSearch = ""; _searchResults = [];
+        _hour = DateTime.Now.Hour; _min = (DateTime.Now.Minute / 5) * 5;
+        _type = PlannedEventType.Glucose; _addInsulinReminder = true;
+    }
+
+    private Task Close() { Reset(); return OnClose.InvokeAsync(); }
+
+    private void OnBackdropClick() => _ = Close();
+}

@@ -1,0 +1,340 @@
+@page "/insulin"
+@attribute [Authorize]
+@using GlucoTrack.Client.Models
+@using GlucoTrack.Shared.Calculations
+@using GlucoTrack.Shared.DTOs.Sync
+@using GlucoTrack.Shared.Entities
+@inject DbService Db
+@inject SyncService Sync
+@inject NavigationManager Nav
+@inject ConfirmService Confirm
+@inject UndoService Undo
+
+<PageTitle>Инсулин — GlucoTrack</PageTitle>
+
+<div class="page">
+    <div class="page-header">
+        <h2>💊 Журнал инсулина</h2>
+        @if (EventId == null)
+        {
+            <button class="btn btn-primary btn-sm" @onclick="() => _showForm = !_showForm">
+                @(_showForm ? "Отмена" : "+ Добавить")
+            </button>
+        }
+    </div>
+
+    @if (_linkedEvent is not null || EventId != null)
+    {
+        <div style="background:var(--c-primary-ultra);border:1.5px solid var(--c-primary-light);border-radius:var(--r-md);padding:.75rem 1rem;margin-bottom:1rem;display:flex;align-items:center;gap:.75rem">
+            <span style="font-size:1.2rem">📅</span>
+            <div style="flex:1">
+                <div style="font-weight:600;font-size:.9rem">
+                    Событие: @(_linkedEvent is not null ? PlannedEventMeta.Label((PlannedEventType)_linkedEvent.EventType) : "Инсулин")
+                </div>
+                @if (_linkedEvent is not null)
+                {
+                    <div style="font-size:.8rem;color:var(--c-text-muted)">
+                        Запланировано на @_linkedEvent.PlannedAtUtc.ToLocalTime().ToString("HH:mm")
+                        @if (!string.IsNullOrEmpty(_linkedEvent.Note))
+                        { <span> · @_linkedEvent.Note</span> }
+                    </div>
+                }
+            </div>
+            <button class="btn btn-ghost btn-sm" @onclick="CancelEvent">✕</button>
+        </div>
+    }
+
+    @if (_showForm || EventId != null)
+    {
+        <div class="form-card" style="margin-bottom:1.5rem">
+            <h4>@(EventId != null ? "Введите данные по событию" : Alert == 1 ? "Коррекционный укол" : "Новая запись")</h4>
+        @if (Alert == 1 && _glucosePrefilled)
+        {
+            <div style="background:#FEF3C7;border:1px solid #F59E0B;border-radius:var(--r-sm);padding:.5rem .75rem;margin-bottom:.75rem;font-size:.82rem;color:#92400E">
+                ⚠️ Расчётная коррекционная доза на основе ваших коэффициентов терапии. Уточните при необходимости.
+            </div>
+        }
+
+            <div class="input-row" style="margin-bottom:.75rem">
+                <div class="form-group">
+                    <label>Дата и время</label>
+                    <input class="form-control" type="datetime-local" @bind="_dt" />
+                </div>
+                <div class="form-group">
+                    <label>Тип</label>
+                    <select class="form-control" @bind="_type">
+                        <option value="@InsulinType.Bolus">Болюс (короткий)</option>
+                        <option value="@InsulinType.Basal">Базал (длинный)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="input-row-3" style="margin-bottom:.75rem">
+                <div class="form-group">
+                    <label>Доза (ЕД)</label>
+                    <input class="form-control" type="number" min="0.5" step="0.5" @bind="_units" />
+                </div>
+                <div class="form-group">
+                    <label>
+                        Углеводы (г)
+                        @if (_carbsPrefilled)
+                        { <span style="font-size:.72rem;color:var(--c-success);margin-left:.35rem">↑ из плана</span> }
+                    </label>
+                    <input class="form-control" type="number" min="0" step="1" @bind="_carbs" placeholder="—" />
+                </div>
+                <div class="form-group">
+                    <label>
+                        Глюкоза до (ммоль/л)
+                        @if (_glucosePrefilled)
+                        { <span style="font-size:.72rem;color:var(--c-success);margin-left:.35rem">↑ из замера</span> }
+                    </label>
+                    <input class="form-control" type="number" min="1" max="30" step="0.1" @bind="_glucoseBefore" placeholder="—" />
+                </div>
+            </div>
+
+            <div style="margin-bottom:.75rem;display:flex;align-items:center;gap:.5rem;font-size:.875rem">
+                <input type="checkbox" id="reminder-cb" @bind="_scheduleReminder" style="width:1rem;height:1rem" />
+                <label for="reminder-cb" style="cursor:pointer;color:var(--c-text-muted)">
+                    📅 Напомнить о замере глюкозы через 1 час
+                </label>
+            </div>
+
+            @if (_err is not null) { <div class="alert alert-error">@_err</div> }
+            <div style="display:flex;gap:.5rem">
+                <button class="btn btn-primary btn-sm" @onclick="AddAsync">
+                    @(EventId != null ? "✓ Сохранить и закрыть событие" : "Сохранить")
+                </button>
+                @if (EventId != null)
+                {
+                    <button class="btn btn-ghost btn-sm" @onclick="CancelEvent">Отмена</button>
+                }
+            </div>
+        </div>
+    }
+
+    @if (_items.Count > 0)
+    {
+        <div class="stats-bar">
+            <div class="stat-card"><div class="stat-value">@_totalBolus.ToString("F1")</div><div class="stat-label">Болюс сегодня (ЕД)</div></div>
+            <div class="stat-card"><div class="stat-value">@_totalBasal.ToString("F1")</div><div class="stat-label">Базал сегодня (ЕД)</div></div>
+        </div>
+
+        <div class="entry-list">
+            @foreach (var item in _items.OrderByDescending(x => x.InjectedAtUtc))
+            {
+                <div class="entry-item">
+                    <div class="entry-time">
+                        <div>@item.InjectedAtUtc.ToLocalTime().ToString("dd.MM")</div>
+                        <div>@item.InjectedAtUtc.ToLocalTime().ToString("HH:mm")</div>
+                    </div>
+                    <div class="entry-main">
+                        <div class="entry-value">@item.Units ЕД · @((InsulinType)item.InsulinType == InsulinType.Bolus ? "Болюс" : "Базал")</div>
+                        <div class="entry-sub">
+                            @(item.Carbs.HasValue ? $"🥗 {item.Carbs:F0} г" : "")
+                            @(item.GlucoseBefore.HasValue ? $"  📈 {item.GlucoseBefore:F1} ммоль/л" : "")
+                        </div>
+                    </div>
+                    <button class="btn btn-ghost btn-sm btn-icon" @onclick="() => DeleteAsync(item.Id)">✕</button>
+                </div>
+            }
+        </div>
+    }
+    else if (!_loading)
+    {
+        <div class="placeholder-page" style="min-height:40vh">
+            <div class="placeholder-icon">💊</div>
+            <h2>Нет записей</h2>
+            <p>Добавьте первую запись об инсулине</p>
+        </div>
+    }
+</div>
+
+@code {
+    [SupplyParameterFromQuery] public Guid? EventId { get; set; }
+    [SupplyParameterFromQuery] public int Alert { get; set; }
+    [SupplyParameterFromQuery] public string? Glucose { get; set; }
+
+    private List<InsulinInjectionDto> _items = [];
+    private PlannedEventDto? _linkedEvent;
+    private bool _loading = true, _showForm;
+    private bool _glucosePrefilled, _carbsPrefilled;
+    private bool _scheduleReminder;
+    private string? _err;
+    private DateTime _dt = DateTime.Now;
+    private InsulinType _type = InsulinType.Bolus;
+    private double _units = 1, _carbs, _glucoseBefore;
+    private double _totalBolus, _totalBasal;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _items = (await Db.GetAllAsync<InsulinInjectionDto>("insulin")).Where(i => !i.IsDeleted).ToList();
+        CalcTotals();
+
+        if (Alert == 1)
+        {
+            _showForm = true;
+            _scheduleReminder = true;
+            if (!string.IsNullOrEmpty(Glucose) &&
+                double.TryParse(Glucose, System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var g))
+            {
+                _glucoseBefore = g;
+                _glucosePrefilled = true;
+
+                // Calculate correction dose using therapy coefficients
+                var coeffs = (await Db.GetAllAsync<TherapyCoeffDto>("therapy"))
+                    .Where(c => !c.IsDeleted).OrderBy(c => c.FromTime).ToList();
+                var now = TimeOnly.FromDateTime(DateTime.Now);
+                var coeff = coeffs.FirstOrDefault(c => now >= c.FromTime && now < c.ToTime)
+                            ?? coeffs.FirstOrDefault();
+                var settings = (await Db.GetAllAsync<UserSettingsDto>("settings")).FirstOrDefault();
+                double target = settings?.TargetGlucose ?? 6.0;
+
+                if (coeff is not null && coeff.InsulinSensitivityFactor > 0)
+                {
+                    var result = BolusCalculator.Calculate(0, g, target,
+                        coeff.InsulinToCarbRatio, coeff.InsulinSensitivityFactor);
+                    if (result.TotalDose > 0)
+                        _units = Math.Round(result.TotalDose * 2) / 2; // round to 0.5
+                }
+            }
+        }
+
+        if (EventId.HasValue)
+        {
+            var events = await Db.GetAllAsync<PlannedEventDto>("planned_events");
+            _linkedEvent = events.FirstOrDefault(e => e.Id == EventId.Value);
+
+            if (_linkedEvent is not null)
+                _dt = _linkedEvent.PlannedAtUtc.ToLocalTime();
+
+            await PrefillFromContextAsync();
+            _showForm = true;
+        }
+
+        _loading = false;
+    }
+
+    private async Task PrefillFromContextAsync()
+    {
+        var now = _linkedEvent?.PlannedAtUtc ?? DateTime.UtcNow;
+
+        // Pre-fill glucose from nearest past glucose reading (within 30 min)
+        var glucoseReadings = (await Db.GetAllAsync<GlucoseReadingDto>("glucose"))
+            .Where(g => !g.IsDeleted &&
+                        g.MeasuredAtUtc <= now &&
+                        (now - g.MeasuredAtUtc).TotalMinutes <= 30)
+            .OrderByDescending(g => g.MeasuredAtUtc)
+            .FirstOrDefault();
+
+        if (glucoseReadings is not null)
+        {
+            _glucoseBefore = glucoseReadings.ValueMmol;
+            _glucosePrefilled = true;
+        }
+
+        // Pre-fill carbs from nearest planned meal event (within ±2h)
+        var plannedEvents = await Db.GetAllAsync<PlannedEventDto>("planned_events");
+        var nearMeal = plannedEvents
+            .Where(e => !e.IsDeleted &&
+                        (PlannedEventType)e.EventType == PlannedEventType.Meal &&
+                        e.MealItems?.Count > 0 &&
+                        Math.Abs((e.PlannedAtUtc - now).TotalHours) <= 2)
+            .OrderBy(e => Math.Abs((e.PlannedAtUtc - now).TotalMinutes))
+            .FirstOrDefault();
+
+        if (nearMeal?.MealItems is { Count: > 0 } mealItems)
+        {
+            var products = (await Db.GetAllAsync<ProductDto>("products"))
+                .Where(p => !p.IsDeleted).ToDictionary(p => p.Id);
+
+            double totalCarbs = 0;
+            foreach (var mi in mealItems)
+            {
+                if (products.TryGetValue(mi.ProductId, out var prod))
+                    totalCarbs += prod.CarbsPer100g * mi.Grams / 100.0;
+            }
+
+            if (totalCarbs > 0)
+            {
+                _carbs = Math.Round(totalCarbs, 0);
+                _carbsPrefilled = true;
+            }
+        }
+    }
+
+    private void CalcTotals()
+    {
+        var today = DateTime.UtcNow.Date;
+        var todayItems = _items.Where(i => i.InjectedAtUtc.Date == today).ToList();
+        _totalBolus = todayItems.Where(i => (InsulinType)i.InsulinType == InsulinType.Bolus).Sum(i => i.Units);
+        _totalBasal = todayItems.Where(i => (InsulinType)i.InsulinType == InsulinType.Basal).Sum(i => i.Units);
+    }
+
+    private async Task AddAsync()
+    {
+        _err = null;
+        if (_units <= 0) { _err = "Доза должна быть больше 0"; return; }
+
+        var dto = new InsulinInjectionDto(
+            Guid.NewGuid(), _dt.ToUniversalTime(), _units, (int)_type,
+            _carbs > 0 ? _carbs : null,
+            _glucoseBefore > 0 ? _glucoseBefore : null,
+            DateTime.UtcNow, false);
+
+        await Db.PutAsync("insulin", dto, pending: true);
+        _items.Add(dto); CalcTotals();
+        _ = Sync.SyncAsync();
+
+        if (_scheduleReminder)
+        {
+            var reminder = new PlannedEventDto(
+                Guid.NewGuid(),
+                DateTime.UtcNow.AddHours(1),
+                (int)PlannedEventType.Glucose,
+                "Контроль после укола",
+                null, null, false,
+                DateTime.UtcNow, false);
+            await Db.PutAsync("planned_events", reminder, pending: false);
+        }
+
+        if (EventId.HasValue && _linkedEvent is not null)
+        {
+            await Db.PutAsync("planned_events",
+                _linkedEvent with { IsDone = true, UpdatedAtUtc = DateTime.UtcNow },
+                pending: false);
+            Nav.NavigateTo("/calendar");
+            return;
+        }
+
+        if (Alert == 1)
+        {
+            Nav.NavigateTo("/calendar");
+            return;
+        }
+
+        _showForm = false; _units = 1; _carbs = 0; _glucoseBefore = 0; _scheduleReminder = false;
+    }
+
+    private void CancelEvent() => Nav.NavigateTo("/calendar");
+
+    private async Task DeleteAsync(Guid id)
+    {
+        var item = _items.First(i => i.Id == id);
+        var label = $"Инсулин {item.Units:F1} ЕД";
+        if (!await Confirm.ConfirmAsync("Удалить запись?", $"{label} — {item.InjectedAtUtc.ToLocalTime():HH:mm}")) return;
+
+        var deleted = item with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow };
+        await Db.PutAsync("insulin", deleted, pending: true);
+        _items.RemoveAll(i => i.Id == id); CalcTotals();
+        _ = Sync.SyncAsync();
+
+        Undo.Push($"Удалено: {label}", async () =>
+        {
+            await Db.PutAsync("insulin", item with { UpdatedAtUtc = DateTime.UtcNow }, pending: true);
+            _items.Add(item); CalcTotals();
+            _ = Sync.SyncAsync();
+            await InvokeAsync(StateHasChanged);
+        });
+    }
+}

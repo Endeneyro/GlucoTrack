@@ -1,0 +1,14 @@
+using System.Security.Claims;
+
+namespace GlucoTrack.Api.Data;
+
+public class CurrentUserService : ICurrentUserService
+{
+    public Guid UserId { get; }
+
+    public CurrentUserService(IHttpContextAccessor httpContextAccessor)
+    {
+        var value = httpContextAccessor.HttpContext?.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        UserId = value is not null ? Guid.Parse(value) : Guid.Empty;
+    }
+}

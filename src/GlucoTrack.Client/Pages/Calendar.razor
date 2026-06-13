@@ -1,0 +1,510 @@
+@page "/calendar"
+@attribute [Authorize]
+@using GlucoTrack.Client.Models
+@using GlucoTrack.Shared.DTOs.Sync
+@inject DbService Db
+@inject SyncService Sync
+@inject NavigationManager Nav
+
+<PageTitle>Календарь — GlucoTrack</PageTitle>
+
+<div style="max-width:860px">
+    <!-- Month navigation -->
+    <div class="home-date-bar" style="justify-content:space-between">
+        <button class="btn btn-ghost btn-icon" @onclick="PrevMonth">‹</button>
+        <span style="font-size:1.1rem;font-weight:600">@_month.ToString("MMMM yyyy", _ru)</span>
+        <button class="btn btn-ghost btn-icon" @onclick="NextMonth">›</button>
+    </div>
+
+    <!-- Calendar grid -->
+    <div class="cal-grid">
+        <div class="cal-dow">
+            @foreach (var h in _dayHeaders)
+            { <div class="cal-dow-cell">@h</div> }
+        </div>
+        <div class="cal-days">
+            @foreach (var day in _calDays)
+            {
+                var isToday    = day == DateOnly.FromDateTime(DateTime.Today);
+                var isSelected = day == _selected;
+                var inMonth    = day.Month == _month.Month;
+                var hasPlan    = _eventsByDate.ContainsKey(day);
+                var cls = "cal-day" +
+                          (isToday    ? " cal-day-today"    : "") +
+                          (isSelected ? " cal-day-selected" : "") +
+                          (!inMonth   ? " cal-day-other-month" : "");
+                <div class="@cls" @onclick="() => SelectDay(day)">
+                    <div class="cal-day-num">@day.Day</div>
+                    @if (hasPlan && inMonth)
+                    { <div class="cal-dots"><div class="cal-dot planned"></div></div> }
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- Дневник дня -->
+    <div class="home-card">
+        <div class="home-card-title">
+            Дневник дня · @_selected.ToString("d MMMM", _ru)
+        </div>
+
+        @if (_alertGlucose.HasValue && _selected == DateOnly.FromDateTime(DateTime.Today))
+        {
+            <div style="background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:var(--r-md);padding:.75rem 1rem;margin-bottom:1rem;display:flex;align-items:center;gap:.75rem">
+                <span style="font-size:1.3rem">⚠️</span>
+                <div style="flex:1;font-size:.875rem">
+                    <div style="font-weight:600;color:#92400E">Глюкоза @_alertGlucose.Value.ToString("F1") ммоль/л — выше нормы</div>
+                    <div style="color:#B45309">Рекомендуется коррекционный укол инсулина</div>
+                </div>
+                <button class="btn btn-sm" style="background:#F59E0B;color:#fff;flex-shrink:0"
+                        @onclick="GoToInsulinAlert">
+                    Ввести инъекцию
+                </button>
+            </div>
+        }
+
+        @if (_loading)
+        { <p style="color:var(--c-text-muted);font-size:.875rem">Загрузка...</p> }
+        else
+        {
+            var allItems = _diaryItems.OrderBy(i => i.Time).ToList();
+            @if (allItems.Count == 0)
+            {
+                <div style="padding:2rem 0;text-align:center;color:var(--c-text-muted)">
+                    <div style="font-size:2.5rem;margin-bottom:.5rem">📭</div>
+                    <div style="font-size:.875rem">В этот день ничего не записано</div>
+                </div>
+            }
+            else
+            {
+                <div class="diary-timeline">
+                    @foreach (var item in allItems)
+                    {
+                        var actionable = IsActionable(item);
+                        var itemCls = "diary-item" +
+                            (item.IsPlanned && !item.IsDone ? " diary-item-planned" : "") +
+                            (item.IsDone    ? " diary-item-done" : "") +
+                            (actionable     ? " diary-item-clickable" : "");
+
+                        <div class="@itemCls" @onclick="() => OnDiaryItemClick(item)">
+                            <div class="diary-item-time">@item.Time.ToString("HH:mm")</div>
+                            <div class="diary-item-icon">@item.Icon</div>
+                            <div class="diary-item-body">
+                                <div class="diary-item-title">@item.Title</div>
+                                @if (!string.IsNullOrEmpty(item.Sub))
+                                { <div class="diary-item-sub">@item.Sub</div> }
+                                @if (!string.IsNullOrEmpty(item.ResultText))
+                                {
+                                    <div style="font-size:.8rem;color:var(--c-success);font-weight:600;margin-top:.2rem">
+                                        ✓ @item.ResultText
+                                    </div>
+                                }
+                            </div>
+                            @if (item.IsDone)
+                            {
+                                <span style="font-size:1rem;color:var(--c-success)">✓</span>
+                            }
+                            else if (item.IsPlanned && (PlannedEventType)item.EventType == PlannedEventType.Activity && actionable)
+                            {
+                                <button class="btn btn-ghost btn-sm" style="flex-shrink:0"
+                                        @onclick:stopPropagation="true"
+                                        @onclick="() => MarkDoneAsync(item.EventId!.Value)">
+                                    Выполнено
+                                </button>
+                            }
+                            else if (item.IsPlanned && !item.IsDone)
+                            {
+                                <span style="font-size:.72rem;padding:.2rem .5rem;border-radius:999px;background:var(--c-warning-light,#FEF3C7);color:#92400E;flex-shrink:0">
+                                    @(actionable ? "▶ нажмите" : "план")
+                                </span>
+                            }
+                            @if (item.IsPlanned && item.EventId is not null)
+                            {
+                                <button class="btn btn-ghost btn-icon btn-sm" style="flex-shrink:0;font-size:.85rem"
+                                        title="Редактировать"
+                                        @onclick:stopPropagation="true"
+                                        @onclick="() => OpenEditModal(item.EventId.Value)">
+                                    ✎
+                                </button>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+
+            <!-- Bottom button -->
+            <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--c-border)">
+                @if (_selected >= DateOnly.FromDateTime(DateTime.Today))
+                {
+                    <div class="diary-plan-btn" @onclick="OpenModal">+ Запланировать событие</div>
+                }
+                else
+                {
+                    <div class="diary-plan-btn" style="color:var(--c-text-muted);border-color:var(--c-border)">+ Добавить</div>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+<PlanModal Visible="_modalOpen" Date="_selected" EditEvent="_editEvent" OnClose="@CloseModal" OnSaved="@OnEventSaved" />
+
+@if (_viewMealOpen && _viewMealEvent is not null)
+{
+    <div class="modal-backdrop" @onclick="() => _viewMealOpen = false">
+        <div class="modal-card" @onclick:stopPropagation="true">
+            <div class="modal-header">
+                <div>
+                    <div class="modal-title">🍽 Приём пищи</div>
+                    <div style="font-size:.82rem;color:var(--c-text-muted)">
+                        @_viewMealEvent.PlannedAtUtc.ToLocalTime().ToString("HH:mm")
+                        @if (!string.IsNullOrEmpty(_viewMealEvent.Note))
+                        { <span> · @_viewMealEvent.Note</span> }
+                    </div>
+                </div>
+                <button class="modal-close" @onclick="() => _viewMealOpen = false">✕</button>
+            </div>
+
+            @if (_viewMealEvent.MealItems?.Count > 0)
+            {
+                <div style="margin-bottom:1rem">
+                    @foreach (var mi in _viewMealEvent.MealItems)
+                    {
+                        <div style="display:flex;justify-content:space-between;padding:.4rem 0;border-bottom:1px solid var(--c-border);font-size:.875rem">
+                            <span>@mi.ProductName</span>
+                            <span style="color:var(--c-text-muted)">@mi.Grams.ToString("F0") г</span>
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <p style="font-size:.875rem;color:var(--c-text-muted);margin-bottom:1rem">Состав не указан</p>
+            }
+
+            <button class="btn btn-primary" @onclick="() => _ = MarkMealEventDoneAsync(_viewMealEvent)">
+                ✓ Отметить выполненным
+            </button>
+        </div>
+    </div>
+}
+
+@code {
+    private static readonly System.Globalization.CultureInfo _ru = new("ru-RU");
+    private static readonly string[] _dayHeaders = ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"];
+
+    private DateTime _month = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private DateOnly _selected = DateOnly.FromDateTime(DateTime.Today);
+    private bool _loading = true, _modalOpen = false;
+
+    private List<DateOnly> _calDays = [];
+    private Dictionary<DateOnly, List<PlannedEventDto>> _eventsByDate = [];
+    private List<DiaryItem> _diaryItems = [];
+
+    private bool _viewMealOpen;
+    private PlannedEventDto? _viewMealEvent;
+    private PlannedEventDto? _editEvent;
+
+    // High-glucose alert
+    private double? _alertGlucose;   // set when glucose > target and no recent insulin
+
+    protected override async Task OnInitializedAsync()
+    {
+        BuildCalendarDays();
+        await LoadDataAsync();
+    }
+
+    private void BuildCalendarDays()
+    {
+        _calDays = [];
+        var dow = (int)_month.DayOfWeek;
+        dow = dow == 0 ? 6 : dow - 1;
+        var start = _month.AddDays(-dow);
+        for (int i = 0; i < 42; i++)
+            _calDays.Add(DateOnly.FromDateTime(start.AddDays(i)));
+    }
+
+    private async Task LoadDataAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        var planned = (await Db.GetAllAsync<PlannedEventDto>("planned_events")).Where(e => !e.IsDeleted).ToList();
+        _eventsByDate = planned
+            .GroupBy(e => DateOnly.FromDateTime(e.PlannedAtUtc.ToLocalTime()))
+            .ToDictionary(g => g.Key, g => g.ToList());
+        await LoadDiaryAsync();
+        _loading = false;
+    }
+
+    private async Task LoadDiaryAsync()
+    {
+        _diaryItems = [];
+
+        // Load all real data for the day
+        var products = (await Db.GetAllAsync<ProductDto>("products"))
+            .Where(p => !p.IsDeleted).ToDictionary(p => p.Id);
+        var meals = (await Db.GetAllAsync<MealEntryDto>("meals"))
+            .Where(m => !m.IsDeleted && m.Date == _selected).ToList();
+        var glucoseAll = (await Db.GetAllAsync<GlucoseReadingDto>("glucose"))
+            .Where(g => !g.IsDeleted && DateOnly.FromDateTime(g.MeasuredAtUtc.ToLocalTime()) == _selected).ToList();
+        var insulinAll = (await Db.GetAllAsync<InsulinInjectionDto>("insulin"))
+            .Where(i => !i.IsDeleted && DateOnly.FromDateTime(i.InjectedAtUtc.ToLocalTime()) == _selected).ToList();
+
+        // Planned events — with result lookup
+        if (_eventsByDate.TryGetValue(_selected, out var planned))
+        {
+            foreach (var ev in planned)
+            {
+                var type = (PlannedEventType)ev.EventType;
+                string? resultText = null;
+
+                if (ev.IsDone)
+                {
+                    var evLocal = ev.PlannedAtUtc.ToLocalTime();
+                    resultText = type switch
+                    {
+                        PlannedEventType.Glucose => glucoseAll
+                            .Where(g => Math.Abs((g.MeasuredAtUtc.ToLocalTime() - evLocal).TotalMinutes) <= 15)
+                            .OrderBy(g => Math.Abs((g.MeasuredAtUtc.ToLocalTime() - evLocal).TotalMinutes))
+                            .Select(g => $"{g.ValueMmol:F1} ммоль/л")
+                            .FirstOrDefault(),
+                        PlannedEventType.Insulin => insulinAll
+                            .Where(i => Math.Abs((i.InjectedAtUtc.ToLocalTime() - evLocal).TotalMinutes) <= 15)
+                            .OrderBy(i => Math.Abs((i.InjectedAtUtc.ToLocalTime() - evLocal).TotalMinutes))
+                            .Select(i => $"{i.Units:F1} ЕД {((GlucoTrack.Shared.Entities.InsulinType)i.InsulinType == GlucoTrack.Shared.Entities.InsulinType.Bolus ? "болюс" : "базал")}")
+                            .FirstOrDefault(),
+                        PlannedEventType.Meal => "съедено",
+                        PlannedEventType.Activity => "выполнено",
+                        PlannedEventType.Weight => "зафиксировано",
+                        _ => null
+                    };
+                }
+
+                string? sub = ev.Note;
+                if (type == PlannedEventType.Meal && ev.MealItems?.Count > 0)
+                {
+                    var mealSub = string.Join(", ", ev.MealItems.Select(m => m.ProductName));
+                    sub = string.IsNullOrEmpty(sub) ? mealSub : $"{sub} · {mealSub}";
+                }
+
+                _diaryItems.Add(new DiaryItem(
+                    ev.PlannedAtUtc.ToLocalTime(), PlannedEventMeta.Icon(type),
+                    PlannedEventMeta.Label(type), sub,
+                    true, ev.IsDone, ev.Id, (int)type, resultText));
+            }
+        }
+
+        // Build sets of real records already "covered" by a done planned event (±15 min)
+        var doneGlucoseIds = new HashSet<Guid>();
+        var doneInsulinIds = new HashSet<Guid>();
+        if (_eventsByDate.TryGetValue(_selected, out var doneEvents))
+        {
+            foreach (var ev in doneEvents.Where(e => e.IsDone))
+            {
+                var evLocal = ev.PlannedAtUtc.ToLocalTime();
+                if ((PlannedEventType)ev.EventType == PlannedEventType.Glucose)
+                    glucoseAll
+                        .Where(g => Math.Abs((g.MeasuredAtUtc.ToLocalTime() - evLocal).TotalMinutes) <= 15)
+                        .OrderBy(g => Math.Abs((g.MeasuredAtUtc.ToLocalTime() - evLocal).TotalMinutes))
+                        .Take(1).ToList()
+                        .ForEach(g => doneGlucoseIds.Add(g.Id));
+                else if ((PlannedEventType)ev.EventType == PlannedEventType.Insulin)
+                    insulinAll
+                        .Where(i => Math.Abs((i.InjectedAtUtc.ToLocalTime() - evLocal).TotalMinutes) <= 15)
+                        .OrderBy(i => Math.Abs((i.InjectedAtUtc.ToLocalTime() - evLocal).TotalMinutes))
+                        .Take(1).ToList()
+                        .ForEach(i => doneInsulinIds.Add(i.Id));
+            }
+        }
+
+        // Collect meal entry IDs that were created from completing a planned meal event
+        var doneMealEntryIds = meals
+            .Where(m => m.LinkedEventId.HasValue &&
+                        _eventsByDate.Values.SelectMany(v => v)
+                            .Any(ev => ev.Id == m.LinkedEventId.Value && ev.IsDone))
+            .Select(m => m.Id)
+            .ToHashSet();
+
+        // Real meals (skip entries linked to a done planned meal event)
+        foreach (var m in meals.Where(m => !doneMealEntryIds.Contains(m.Id)))
+        {
+            products.TryGetValue(m.ProductId, out var p);
+            _diaryItems.Add(new DiaryItem(
+                _selected.ToDateTime(m.Time), "🍽",
+                p?.Name ?? "Продукт",
+                $"{m.Grams:F0} г · {(p is null ? 0 : p.CaloriesPer100g * m.Grams / 100):F0} ккал",
+                false, false, null, -1, null));
+        }
+
+        // Real glucose (skip records already shown via done planned events)
+        foreach (var g in glucoseAll.Where(g => !doneGlucoseIds.Contains(g.Id)))
+            _diaryItems.Add(new DiaryItem(
+                g.MeasuredAtUtc.ToLocalTime(), "📈",
+                $"{g.ValueMmol:F1} ммоль/л", null,
+                false, false, null, -1, null));
+
+        // Real insulin (skip records already shown via done planned events)
+        foreach (var ins in insulinAll.Where(i => !doneInsulinIds.Contains(i.Id)))
+            _diaryItems.Add(new DiaryItem(
+                ins.InjectedAtUtc.ToLocalTime(), "💊",
+                $"Инсулин {ins.Units:F1} ЕД", null,
+                false, false, null, -1, null));
+
+        // High-glucose alert: latest glucose today > target, no bolus in last 2h
+        _alertGlucose = null;
+        if (_selected == DateOnly.FromDateTime(DateTime.Today) && glucoseAll.Count > 0)
+        {
+            var settings = (await Db.GetAllAsync<UserSettingsDto>("settings")).FirstOrDefault();
+            double target = settings?.TargetGlucoseHigh ?? 10.0;
+            var latest = glucoseAll.OrderByDescending(g => g.MeasuredAtUtc).First();
+            if (latest.ValueMmol > target)
+            {
+                var now = DateTime.UtcNow;
+                var recentBolus = insulinAll.Any(i =>
+                    (GlucoTrack.Shared.Entities.InsulinType)i.InsulinType == GlucoTrack.Shared.Entities.InsulinType.Bolus &&
+                    (now - i.InjectedAtUtc).TotalHours <= 2);
+                if (!recentBolus)
+                    _alertGlucose = latest.ValueMmol;
+            }
+        }
+    }
+
+    private bool IsActionable(DiaryItem item) =>
+        item.IsPlanned && !item.IsDone &&
+        item.Time <= DateTime.Now.AddMinutes(1);
+
+    private async Task OnDiaryItemClick(DiaryItem item)
+    {
+        if (!IsActionable(item) || item.EventId == null) return;
+
+        var type = (PlannedEventType)item.EventType;
+        switch (type)
+        {
+            case PlannedEventType.Glucose:
+                Nav.NavigateTo($"/glucose?eventId={item.EventId}");
+                break;
+            case PlannedEventType.Insulin:
+                await OpenInsulinBolusAsync(item.EventId!.Value);
+                break;
+            case PlannedEventType.Meal:
+                var mealEv = GetPlannedEvent(item.EventId!.Value);
+                if (mealEv is not null) { _viewMealEvent = mealEv; _viewMealOpen = true; }
+                break;
+            case PlannedEventType.Activity:
+                // Handled by inline button
+                break;
+            case PlannedEventType.Weight:
+                Nav.NavigateTo("/settings");
+                break;
+        }
+    }
+
+    private async Task MarkDoneAsync(Guid eventId)
+    {
+        var events = await Db.GetAllAsync<PlannedEventDto>("planned_events");
+        var ev = events.FirstOrDefault(e => e.Id == eventId);
+        if (ev is not null)
+            await Db.PutAsync("planned_events",
+                ev with { IsDone = true, UpdatedAtUtc = DateTime.UtcNow },
+                pending: false);
+        await LoadDiaryAsync();
+        StateHasChanged();
+    }
+
+    private async Task OpenInsulinBolusAsync(Guid insulinEventId)
+    {
+        // Find nearest planned meal event within 90 min after this insulin event
+        var allEvents = await Db.GetAllAsync<PlannedEventDto>("planned_events");
+        var insulinEv = allEvents.FirstOrDefault(e => e.Id == insulinEventId);
+        var insulinTime = insulinEv?.PlannedAtUtc ?? DateTime.UtcNow;
+
+        var mealEv = allEvents
+            .Where(e => !e.IsDeleted && (PlannedEventType)e.EventType == PlannedEventType.Meal
+                && e.PlannedAtUtc >= insulinTime
+                && e.PlannedAtUtc <= insulinTime.AddMinutes(90))
+            .OrderBy(e => e.PlannedAtUtc)
+            .FirstOrDefault();
+
+        // Calculate total carbs from meal
+        double totalCarbs = 0;
+        if (mealEv?.MealItems?.Count > 0)
+        {
+            var products = (await Db.GetAllAsync<ProductDto>("products")).ToDictionary(p => p.Id);
+            foreach (var item in mealEv.MealItems)
+            {
+                if (products.TryGetValue(item.ProductId, out var prod))
+                {
+                    var grams = prod.MeasureType == 1 ? item.Grams * (prod.PieceWeightG ?? 100) : item.Grams;
+                    totalCarbs += prod.CarbsPer100g * grams / 100.0;
+                }
+            }
+        }
+
+        // Get latest glucose (within 2 hours)
+        var glucose = (await Db.GetAllAsync<GlucoseReadingDto>("glucose"))
+            .Where(g => !g.IsDeleted && (DateTime.UtcNow - g.MeasuredAtUtc).TotalHours <= 2)
+            .OrderByDescending(g => g.MeasuredAtUtc)
+            .FirstOrDefault();
+
+        var url = $"/bolus?eventId={insulinEventId}";
+        if (totalCarbs > 0)
+            url += $"&carbs={totalCarbs.ToString("F0", System.Globalization.CultureInfo.InvariantCulture)}";
+        if (glucose is not null)
+            url += $"&glucose={glucose.ValueMmol.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)}";
+        Nav.NavigateTo(url);
+    }
+
+    private void SelectDay(DateOnly day)
+    {
+        _selected = day;
+        if (day.Month != _month.Month)
+            _month = new DateTime(day.Year, day.Month, 1);
+        _ = LoadDiaryAsync().ContinueWith(_ => InvokeAsync(StateHasChanged));
+    }
+
+    private void PrevMonth() { _month = _month.AddMonths(-1); BuildCalendarDays(); }
+    private void NextMonth() { _month = _month.AddMonths(1); BuildCalendarDays(); }
+
+    private PlannedEventDto? GetPlannedEvent(Guid eventId) =>
+        _eventsByDate.Values.SelectMany(v => v).FirstOrDefault(e => e.Id == eventId);
+
+    private async Task MarkMealEventDoneAsync(PlannedEventDto ev)
+    {
+        _viewMealOpen = false;
+        if (ev.MealItems?.Count > 0)
+        {
+            foreach (var mi in ev.MealItems)
+            {
+                var dto = new MealEntryDto(
+                    Guid.NewGuid(),
+                    DateOnly.FromDateTime(ev.PlannedAtUtc.ToLocalTime()),
+                    TimeOnly.FromDateTime(ev.PlannedAtUtc.ToLocalTime()),
+                    (int)GlucoTrack.Shared.Entities.MealType.Snack,
+                    mi.ProductId, mi.Grams,
+                    DateTime.UtcNow, false,
+                    LinkedEventId: ev.Id);
+                await Db.PutAsync("meals", dto, pending: true);
+            }
+            _ = Sync.SyncAsync();
+        }
+        await MarkDoneAsync(ev.Id);
+    }
+
+    private void OpenModal() { _editEvent = null; _modalOpen = true; }
+    private void CloseModal() { _editEvent = null; _modalOpen = false; }
+    private async Task OnEventSaved() { _editEvent = null; _modalOpen = false; await LoadDataAsync(); }
+
+    private void GoToInsulinAlert() =>
+        Nav.NavigateTo($"/insulin?alert=1&glucose={_alertGlucose!.Value.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)}");
+
+    private void OpenEditModal(Guid eventId)
+    {
+        _editEvent = GetPlannedEvent(eventId);
+        if (_editEvent is not null) _modalOpen = true;
+    }
+
+    private record DiaryItem(
+        DateTime Time, string Icon, string Title, string? Sub,
+        bool IsPlanned, bool IsDone,
+        Guid? EventId, int EventType, string? ResultText);
+}

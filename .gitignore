@@ -1,0 +1,18 @@
+# .NET
+bin/
+obj/
+*.user
+.vs/
+.vscode/
+
+# Secrets
+.env
+!.env.example
+backups/
+
+# Blazor
+wwwroot/_framework/
+
+# OS
+.DS_Store
+Thumbs.db

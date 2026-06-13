@@ -1,0 +1,24 @@
+@inject ConfirmService Confirm
+@implements IDisposable
+
+@if (Confirm.IsOpen)
+{
+    <div class="modal-backdrop" @onclick="() => Confirm.Resolve(false)">
+        <div class="modal-card" style="max-width:360px" @onclick:stopPropagation="true">
+            <div class="modal-header" style="border-bottom:none;padding-bottom:.25rem">
+                <div class="modal-title" style="font-size:1rem">@Confirm.Title</div>
+            </div>
+            <p style="font-size:.9rem;color:var(--c-text-muted);margin:.25rem 0 1.25rem">@Confirm.Message</p>
+            <div style="display:flex;gap:.75rem;justify-content:flex-end">
+                <button class="btn btn-ghost" @onclick="() => Confirm.Resolve(false)">Отмена</button>
+                <button class="btn btn-danger" @onclick="() => Confirm.Resolve(true)">Удалить</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    protected override void OnInitialized() => Confirm.OnChanged += Refresh;
+    private void Refresh() => InvokeAsync(StateHasChanged);
+    public void Dispose() => Confirm.OnChanged -= Refresh;
+}

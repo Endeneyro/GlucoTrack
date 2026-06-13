@@ -1,0 +1,751 @@
+@page "/products"
+@attribute [Authorize]
+@using GlucoTrack.Shared.DTOs.Sync
+@inject DbService Db
+@inject SyncService Sync
+@inject HttpClient Http
+
+<PageTitle>Продукты — GlucoTrack</PageTitle>
+
+<div style="max-width:900px">
+    <div class="home-date-bar" style="justify-content:space-between">
+        <h2 style="margin:0;font-size:1.25rem;font-weight:700">Продукты</h2>
+        <button class="btn btn-primary" @onclick="OpenAdd">+ Добавить</button>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tab-bar" style="margin-bottom:1rem">
+        <button class="tab-btn @(_tab == 0 ? "active" : "")" @onclick="() => SetTab(0)">Мои</button>
+        <button class="tab-btn @(_tab == 1 ? "active" : "")" @onclick="() => SetTab(1)">Избранное</button>
+        <button class="tab-btn @(_tab == 2 ? "active" : "")" @onclick="() => SetTab(2)">Поиск в базе</button>
+    </div>
+
+    <!-- Add / Edit form -->
+    @if (_editing)
+    {
+        <div class="home-card" style="margin-bottom:1rem;border:2px solid var(--c-primary)">
+            <div class="home-card-title">
+                @(_editId == Guid.Empty ? "Новый продукт" : "Редактировать")
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+                <div class="form-group" style="grid-column:1/-1">
+                    <label>Название *</label>
+                    <input class="form-control" type="text" placeholder="Например: Куриная грудка" @bind="_name" />
+                </div>
+
+                <div class="form-group">
+                    <label>Категория</label>
+                    <select class="form-control" @bind="_category">
+                        @foreach (var (val, lbl) in _categories)
+                        { <option value="@val">@lbl</option> }
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Единица измерения</label>
+                    <select class="form-control" @bind="_measureType">
+                        <option value="0">По весу (граммы)</option>
+                        <option value="1">Штучный</option>
+                    </select>
+                </div>
+
+                @if (_measureType == 1)
+                {
+                    <div class="form-group">
+                        <label>Вес одной штуки (г)</label>
+                        <input class="form-control" type="number" min="1" step="1" @bind="_pieceWeightG" />
+                    </div>
+                }
+
+                <div class="form-group">
+                    <label>Порция по умолчанию (г)</label>
+                    <input class="form-control" type="number" min="1" step="1" @bind="_defaultServingG" />
+                </div>
+            </div>
+
+            <!-- Simple / Composite toggle -->
+            <div style="display:flex;gap:.75rem;margin:.5rem 0 1rem">
+                <button class="btn @(!_isComposite ? "btn-primary" : "btn-ghost")"
+                        @onclick="() => _isComposite = false">Простой продукт</button>
+                <button class="btn @(_isComposite ? "btn-primary" : "btn-ghost")"
+                        @onclick="() => _isComposite = true">Составное блюдо</button>
+            </div>
+
+            @if (_isComposite)
+            {
+                <!-- Ingredient search -->
+                <div class="form-card" style="margin-bottom:.75rem">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
+                        <strong>Ингредиенты</strong>
+                        @if (_ingredients.Count > 0)
+                        {
+                            <span style="font-size:.8rem;color:var(--c-text-muted)">
+                                Всего: @_ingredients.Sum(i => i.Grams).ToString("F0") г →
+                                @(_totalYieldG > 0 ? _totalYieldG.ToString("F0") : _ingredients.Sum(i => i.Grams).ToString("F0")) г готового блюда
+                            </span>
+                        }
+                    </div>
+
+                    @foreach (var item in _ingredients)
+                    {
+                        var idx = _ingredients.IndexOf(item);
+                        <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem">
+                            <div style="flex:1;font-size:.875rem">@item.Name</div>
+                            <input class="form-control" type="number" min="1" step="1" style="width:80px"
+                                   value="@item.Grams"
+                                   @onchange="e => UpdateIngGrams(idx, double.TryParse(e.Value?.ToString(), out var g) ? g : item.Grams)" />
+                            <span style="font-size:.8rem;color:var(--c-text-muted)">г</span>
+                            <button class="btn btn-ghost btn-icon btn-sm" @onclick="() => _ingredients.RemoveAt(idx)">✕</button>
+                        </div>
+                    }
+
+                    <div class="form-group" style="margin-bottom:.5rem">
+                        <input class="form-control" type="text" placeholder="Добавить ингредиент..."
+                               @bind="_ingSearch" @oninput="SearchIngredients" />
+                        @if (_ingResults.Count > 0)
+                        {
+                            <div class="search-results">
+                                @foreach (var p in _ingResults)
+                                {
+                                    <div class="search-result-item" @onclick="() => AddIngredient(p)">
+                                        <div>@p.Name</div>
+                                        <div class="search-result-sub">@p.CaloriesPer100g.ToString("F0") ккал · Б@p.ProteinPer100g.ToString("F1") Ж@p.FatPer100g.ToString("F1") У@p.CarbsPer100g.ToString("F1")</div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+
+                    <div class="form-group" style="margin-bottom:0">
+                        <label>Выход готового блюда (г) — если отличается от суммы ингредиентов</label>
+                        <input class="form-control" type="number" min="1" step="1" @bind="_totalYieldG"
+                               placeholder="Оставьте 0 = сумма ингредиентов" />
+                    </div>
+                </div>
+
+                @if (_ingredients.Count > 0)
+                {
+                    <!-- Auto-calculated nutrients preview -->
+                    var preview = CalcCompositeNutrients();
+                    <div style="background:var(--c-primary-ultra);border-radius:var(--r-md);padding:.75rem;font-size:.82rem;margin-bottom:.75rem">
+                        <strong>КБЖУ (авторасчёт на 100 г):</strong>
+                        @preview.Cal.ToString("F0") ккал ·
+                        Б @preview.Prot.ToString("F1") ·
+                        Ж @preview.Fat.ToString("F1") ·
+                        У @preview.Carbs.ToString("F1")
+                    </div>
+                }
+            }
+            else
+            {
+                <!-- Manual nutrients -->
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+                    <div class="form-group">
+                        <label>Калории (на 100 г) *</label>
+                        <input class="form-control" type="number" min="0" step="0.1" @bind="_cal" />
+                    </div>
+                    <div class="form-group">
+                        <label>Белки (г)</label>
+                        <input class="form-control" type="number" min="0" step="0.1" @bind="_prot" />
+                    </div>
+                    <div class="form-group">
+                        <label>Жиры (г)</label>
+                        <input class="form-control" type="number" min="0" step="0.1" @bind="_fat" />
+                    </div>
+                    <div class="form-group">
+                        <label>Углеводы (г)</label>
+                        <input class="form-control" type="number" min="0" step="0.1" @bind="_carbs" />
+                    </div>
+                    <div class="form-group">
+                        <label>Клетчатка (г)</label>
+                        <input class="form-control" type="number" min="0" step="0.1" @bind="_fiber" />
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            ГИ (Гликемический индекс)
+                            @if (_gi.HasValue)
+                            {
+                                var (giLabel, giColor) = _gi.Value <= 55 ? ("низкий", "#16a34a")
+                                    : _gi.Value <= 69 ? ("средний", "#d97706")
+                                    : ("высокий", "#dc2626");
+                                <span style="font-size:.72rem;padding:.15rem .45rem;border-radius:999px;background:@giColor;color:#fff;margin-left:.4rem">@giLabel</span>
+                            }
+                        </label>
+                        <input class="form-control" type="number" min="0" max="100" step="1" @bind="_gi" placeholder="0–100 (необязательно)" />
+                    </div>
+                </div>
+                <details style="margin-top:.25rem">
+                    <summary style="cursor:pointer;font-size:.875rem;color:var(--c-text-muted);margin-bottom:.75rem">
+                        Витамины и минералы (необязательно)
+                    </summary>
+                    <p style="font-weight:600;margin:.5rem 0 .25rem;font-size:.85rem;color:#3B82F6">Витамины</p>
+                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem">
+                        <div class="form-group"><label style="font-size:.78rem">A (мг)</label><input class="form-control" type="number" min="0" step="0.01" @bind="_vitA" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">C (мг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_vitC" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">D (мкг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_vitD" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">B1 Тиамин (мг)</label><input class="form-control" type="number" min="0" step="0.01" @bind="_vitB1" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">B2 Рибофлавин (мг)</label><input class="form-control" type="number" min="0" step="0.01" @bind="_vitB2" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">B3 Ниацин (мг)</label><input class="form-control" type="number" min="0" step="0.01" @bind="_vitB3" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">B4 Холин (мг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_vitB4" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">B5 Пантотен (мг)</label><input class="form-control" type="number" min="0" step="0.01" @bind="_vitB5" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">B6 Пиридоксин (мг)</label><input class="form-control" type="number" min="0" step="0.01" @bind="_vitB6" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">B9 Фолат (мкг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_vitB9" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">B12 (мкг)</label><input class="form-control" type="number" min="0" step="0.01" @bind="_vitB12" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">E (мг)</label><input class="form-control" type="number" min="0" step="0.01" @bind="_vitE" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">K (мкг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_vitK" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">H Биотин (мкг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_vitH" @bind:event="onchange" /></div>
+                    </div>
+                    <p style="font-weight:600;margin:.75rem 0 .25rem;font-size:.85rem;color:#3B82F6">Макроэлементы (мг)</p>
+                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem">
+                        <div class="form-group"><label style="font-size:.78rem">Калий K (мг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_potassium" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">Натрий Na (мг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_sodium" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">Фосфор P (мг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_phosphorus" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">Магний Mg (мг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_magnesium" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">Кальций Ca (мг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_calcium" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">Хлор Cl (мг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_chlorine" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">Сера S (мг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_sulfur" @bind:event="onchange" /></div>
+                    </div>
+                    <p style="font-weight:600;margin:.75rem 0 .25rem;font-size:.85rem;color:#3B82F6">Микроэлементы</p>
+                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem">
+                        <div class="form-group"><label style="font-size:.78rem">Железо Fe (мг)</label><input class="form-control" type="number" min="0" step="0.01" @bind="_iron" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">Цинк Zn (мг)</label><input class="form-control" type="number" min="0" step="0.01" @bind="_zinc" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">Марганец Mn (мг)</label><input class="form-control" type="number" min="0" step="0.01" @bind="_manganese" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">Медь Cu (мкг)</label><input class="form-control" type="number" min="0" step="1" @bind="_copper" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">Селен Se (мкг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_selenium" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">Йод I (мкг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_iodine" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">Фтор F (мкг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_fluorine" @bind:event="onchange" /></div>
+                        <div class="form-group"><label style="font-size:.78rem">Хром Cr (мкг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_chromium" @bind:event="onchange" /></div>
+                    </div>
+                </details>
+            }
+
+            <!-- Image upload -->
+            <div class="form-group" style="margin-top:.75rem">
+                <label>Фото продукта</label>
+                <div style="display:flex;align-items:center;gap:1rem">
+                    @if (_imagePreview is not null)
+                    {
+                        <img src="@_imagePreview" style="width:64px;height:64px;object-fit:cover;border-radius:var(--r-md);border:1px solid var(--c-border)" alt="фото" />
+                    }
+                    else if (_editId != Guid.Empty && _existingImageUrl is not null)
+                    {
+                        <img src="@_existingImageUrl" style="width:64px;height:64px;object-fit:cover;border-radius:var(--r-md);border:1px solid var(--c-border)" alt="фото" />
+                    }
+                    else
+                    {
+                        <div style="width:64px;height:64px;border-radius:var(--r-md);border:1.5px dashed var(--c-border);display:flex;align-items:center;justify-content:center;font-size:1.5rem;color:var(--c-text-muted)">🖼</div>
+                    }
+                    <div>
+                        <InputFile OnChange="OnImageSelected" accept=".jpg,.jpeg,.png,.webp" style="display:none" id="img-input" />
+                        <label for="img-input" class="btn btn-ghost btn-sm" style="cursor:pointer">Выбрать фото</label>
+                        @if (_imageError is not null)
+                        { <div style="font-size:.78rem;color:var(--c-danger);margin-top:.25rem">@_imageError</div> }
+                        else
+                        { <div style="font-size:.75rem;color:var(--c-text-muted);margin-top:.25rem">JPG, PNG, WebP · макс. 2 МБ</div> }
+                    </div>
+                </div>
+            </div>
+
+            @if (_error is not null) { <div class="alert alert-error" style="margin-top:.5rem">@_error</div> }
+
+            <div style="margin-top:1rem;display:flex;gap:.5rem">
+                <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_saving">
+                    @(_saving ? "Сохранение..." : "Сохранить")
+                </button>
+                <button class="btn btn-ghost" @onclick="CancelEdit">Отмена</button>
+            </div>
+        </div>
+    }
+
+    <!-- Tab: Мои продукты -->
+    @if (_tab == 0)
+    {
+        <div class="form-group" style="margin-bottom:.75rem">
+            <input class="form-control" type="text" placeholder="Поиск по названию..."
+                   @bind="_search" @oninput="e => _search = e.Value?.ToString() ?? string.Empty" />
+        </div>
+
+        @if (_loading)
+        { <p style="color:var(--c-text-muted)">Загрузка...</p> }
+        else
+        {
+            var visible = _myProducts
+                .Where(p => string.IsNullOrEmpty(_search) || p.Name.Contains(_search, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(p => p.Name).ToList();
+            @if (visible.Count == 0)
+            {
+                <div class="home-card" style="text-align:center;padding:2rem;color:var(--c-text-muted)">
+                    <div style="font-size:2.5rem">🛒</div>
+                    <div style="margin-top:.5rem;font-size:.9rem">
+                        @(string.IsNullOrEmpty(_search) ? "Нет продуктов. Нажмите «+ Добавить»." : $"Ничего не найдено по запросу «{_search}»")
+                    </div>
+                </div>
+            }
+            else { @ProductList(visible, mine: true) }
+        }
+    }
+
+    <!-- Tab: Избранное -->
+    @if (_tab == 1)
+    {
+        @if (_favLoading)
+        { <p style="color:var(--c-text-muted)">Загрузка...</p> }
+        else if (_favorites.Count == 0)
+        {
+            <div class="home-card" style="text-align:center;padding:2rem;color:var(--c-text-muted)">
+                <div style="font-size:2.5rem">⭐</div>
+                <div style="margin-top:.5rem;font-size:.9rem">Здесь появятся продукты которые вы лайкнули</div>
+            </div>
+        }
+        else { @ProductList(_favorites, mine: false) }
+    }
+
+    <!-- Tab: Поиск в базе -->
+    @if (_tab == 2)
+    {
+        <div style="display:flex;gap:.5rem;margin-bottom:.75rem">
+            <input class="form-control" type="text" placeholder="Поиск по базе..."
+                   @bind="_globalSearch" @onkeydown="OnGlobalSearchKey" style="flex:1" />
+            <button class="btn btn-primary" @onclick="DoGlobalSearchAsync">Найти</button>
+        </div>
+        @if (_globalLoading)
+        { <p style="color:var(--c-text-muted)">Поиск...</p> }
+        else if (_globalResults.Count > 0)
+        {
+            <div style="display:flex;flex-direction:column;gap:.5rem">
+                @foreach (var item in _globalResults)
+                {
+                    <div class="home-card" style="padding:.75rem 1rem">
+                        <div style="display:flex;align-items:flex-start;gap:.75rem">
+                            <div style="flex:1;min-width:0">
+                                <div style="display:flex;align-items:center;gap:.5rem">
+                                    <span style="font-weight:600;font-size:.95rem">@item.Product.Name</span>
+                                    <span class="product-badge @item.Source">@SourceLabel(item.Source)</span>
+                                    @if (item.Product.IsVerified) { <span style="font-size:.7rem;color:var(--c-success)">✓ верифицирован</span> }
+                                </div>
+                                <div style="font-size:.8rem;color:var(--c-text-muted);margin-top:.2rem">
+                                    @item.Product.CaloriesPer100g.ToString("F0") ккал ·
+                                    Б&nbsp;@item.Product.ProteinPer100g.ToString("F1") ·
+                                    Ж&nbsp;@item.Product.FatPer100g.ToString("F1") ·
+                                    У&nbsp;@item.Product.CarbsPer100g.ToString("F1")
+                                    @if (item.Product.IsComposite) { <span> · составной</span> }
+                                </div>
+                            </div>
+                            <div style="display:flex;gap:.25rem;align-items:center">
+                                <!-- Like/Dislike -->
+                                <button class="btn btn-ghost btn-icon btn-sm @(item.MyReaction == 1 ? "active-like" : "")"
+                                        title="Нравится (@item.Product.LikesCount)"
+                                        @onclick="() => ReactAsync(item, 1)">👍 @item.Product.LikesCount</button>
+                                <button class="btn btn-ghost btn-icon btn-sm @(item.MyReaction == -1 ? "active-dislike" : "")"
+                                        title="Не нравится"
+                                        @onclick="() => ReactAsync(item, -1)">👎</button>
+                                @if (item.Source != "mine")
+                                {
+                                    <button class="btn btn-ghost btn-sm" title="Клонировать в мои"
+                                            @onclick="() => CloneAsync(item)">📋 Клонировать</button>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        else if (_globalSearched)
+        {
+            <div class="home-card" style="text-align:center;padding:2rem;color:var(--c-text-muted)">
+                <div style="font-size:.9rem">Ничего не найдено по запросу «@_globalSearch»</div>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    private int _tab = 0;
+    private bool _loading = true, _favLoading = false, _globalLoading = false;
+    private bool _globalSearched = false;
+
+    private List<ProductDto> _myProducts = [];
+    private List<ProductDto> _favorites = [];
+    private List<ProductSearchItemDto> _globalResults = [];
+    private string _search = "", _globalSearch = "";
+
+    // ── Form state ────────────────────────────────────────────────────────────
+    private bool _editing = false, _saving = false;
+    private string? _error;
+
+    // Image
+    private IBrowserFile? _imageFile;
+    private string? _imagePreview;
+    private string? _imageError;
+    private string? _existingImageUrl;
+    private Guid _editId = Guid.Empty;
+
+    private string _name = "";
+    private int _category = 0, _measureType = 0;
+    private double _pieceWeightG = 0, _defaultServingG = 100;
+    private bool _isComposite = false;
+    private double _totalYieldG = 0;
+
+    // Simple nutrients
+    private double _cal, _prot, _fat, _carbs, _fiber;
+    private int? _gi;
+    private double? _vitA, _vitC, _vitD, _vitB1, _vitB2, _vitB3, _vitB4, _vitB5, _vitB6, _vitB9, _vitB12, _vitE, _vitK, _vitH;
+    private double? _calcium, _phosphorus, _potassium, _sodium, _chlorine, _magnesium, _sulfur, _iron, _zinc, _selenium, _iodine, _manganese, _copper, _fluorine, _chromium;
+
+    // Composite ingredients
+    private List<IngredientItem> _ingredients = [];
+    private List<ProductDto> _allProducts = [];
+    private List<ProductDto> _ingResults = [];
+    private string _ingSearch = "";
+
+    private static readonly (int val, string lbl)[] _categories =
+    [
+        (0,"Прочее"), (1,"Мясо"), (2,"Рыба"), (3,"Молочные"), (4,"Злаки"),
+        (5,"Овощи"), (6,"Фрукты"), (7,"Выпечка"), (8,"Напитки"),
+        (9,"Орехи"), (10,"Сладкое"), (11,"Яйца"), (12,"Бобовые")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadMyProductsAsync();
+    }
+
+    private async Task SetTab(int t)
+    {
+        _tab = t;
+        if (t == 1 && _favorites.Count == 0) await LoadFavoritesAsync();
+    }
+
+    private async Task LoadMyProductsAsync()
+    {
+        _loading = true;
+        _myProducts = (await Db.GetAllAsync<ProductDto>("products"))
+            .Where(p => !p.IsDeleted).ToList();
+        _allProducts = _myProducts;
+        _loading = false;
+    }
+
+    private async Task LoadFavoritesAsync()
+    {
+        _favLoading = true;
+        try
+        {
+            var result = await Http.GetFromJsonAsync<List<ProductDto>>("/api/products/favorites");
+            _favorites = result ?? [];
+        }
+        catch { _favorites = []; }
+        _favLoading = false;
+    }
+
+    private async Task DoGlobalSearchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_globalSearch)) return;
+        _globalLoading = true; _globalSearched = false;
+        try
+        {
+            var url = $"/api/products/search?q={Uri.EscapeDataString(_globalSearch)}&take=40";
+            var result = await Http.GetFromJsonAsync<List<ProductSearchItemDto>>(url);
+            _globalResults = result ?? [];
+        }
+        catch { _globalResults = []; }
+        _globalLoading = false; _globalSearched = true;
+    }
+
+    private async Task OnGlobalSearchKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await DoGlobalSearchAsync();
+    }
+
+    // ── Form open/close ───────────────────────────────────────────────────────
+
+    private void OpenAdd()
+    {
+        _editId = Guid.Empty; _name = ""; _category = 0; _measureType = 0;
+        _pieceWeightG = 0; _defaultServingG = 100; _isComposite = false; _totalYieldG = 0;
+        _cal = 0; _prot = 0; _fat = 0; _carbs = 0; _fiber = 0; _gi = null;
+        _vitA = _vitC = _vitD = _vitB1 = _vitB2 = _vitB3 = _vitB4 = _vitB5 = _vitB6 = _vitB9 = _vitB12 = _vitE = _vitK = _vitH = null;
+        _calcium = _phosphorus = _potassium = _sodium = _chlorine = _magnesium = _sulfur = _iron = _zinc = _selenium = _iodine = _manganese = _copper = _fluorine = _chromium = null;
+        _ingredients = []; _ingSearch = ""; _ingResults = [];
+        _imageFile = null; _imagePreview = null; _imageError = null; _existingImageUrl = null;
+        _error = null; _editing = true;
+    }
+
+    private void OpenEdit(ProductDto p)
+    {
+        _imageFile = null; _imagePreview = null; _imageError = null;
+        _existingImageUrl = ProductImageUrl(p.Id);
+        _editId = p.Id; _name = p.Name; _category = p.Category; _measureType = p.MeasureType;
+        _pieceWeightG = p.PieceWeightG ?? 0; _defaultServingG = p.DefaultServingG;
+        _isComposite = p.IsComposite; _totalYieldG = p.TotalYieldG ?? 0;
+        _gi = p.GlycemicIndex;
+        _cal = p.CaloriesPer100g; _prot = p.ProteinPer100g;
+        _fat = p.FatPer100g; _carbs = p.CarbsPer100g; _fiber = p.FiberPer100g;
+        _vitA = p.VitaminA; _vitC = p.VitaminC; _vitD = p.VitaminD;
+        _vitB1 = p.VitaminB1; _vitB2 = p.VitaminB2; _vitB3 = p.VitaminB3;
+        _vitB4 = p.VitaminB4; _vitB5 = p.VitaminB5; _vitB6 = p.VitaminB6;
+        _vitB9 = p.VitaminB9; _vitB12 = p.VitaminB12; _vitE = p.VitaminE; _vitK = p.VitaminK; _vitH = p.VitaminH;
+        _calcium = p.Calcium; _phosphorus = p.Phosphorus; _potassium = p.Potassium;
+        _sodium = p.Sodium; _chlorine = p.Chlorine; _magnesium = p.Magnesium;
+        _sulfur = p.Sulfur; _iron = p.Iron; _zinc = p.Zinc; _selenium = p.Selenium; _iodine = p.Iodine;
+        _manganese = p.Manganese; _copper = p.Copper; _fluorine = p.Fluorine; _chromium = p.Chromium;
+        _ingredients = p.Ingredients?.Select(i => new IngredientItem(i.IngredientProductId, i.IngredientName, i.Grams)).ToList() ?? [];
+        _ingSearch = ""; _ingResults = [];
+        _error = null; _editing = true;
+    }
+
+    private void CancelEdit() { _editing = false; _error = null; _imageFile = null; _imagePreview = null; _imageError = null; }
+
+    private async Task OnImageSelected(InputFileChangeEventArgs e)
+    {
+        _imageError = null;
+        var file = e.File;
+        const long maxBytes = 2 * 1024 * 1024;
+
+        if (file.Size > maxBytes)
+        { _imageError = "Файл слишком большой. Максимум 2 МБ."; return; }
+
+        var ext = Path.GetExtension(file.Name).ToLowerInvariant();
+        if (ext is not (".jpg" or ".jpeg" or ".png" or ".webp"))
+        { _imageError = "Допустимые форматы: JPG, PNG, WebP."; return; }
+
+        _imageFile = file;
+        // Generate preview via data URL
+        await using var stream = file.OpenReadStream(maxBytes);
+        var buf = new byte[file.Size];
+        _ = await stream.ReadAsync(buf);
+        var mime = ext == ".png" ? "image/png" : ext == ".webp" ? "image/webp" : "image/jpeg";
+        _imagePreview = $"data:{mime};base64,{Convert.ToBase64String(buf)}";
+    }
+
+    // ── Save ──────────────────────────────────────────────────────────────────
+
+    private async Task SaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_name)) { _error = "Введите название продукта"; return; }
+
+        double cal = _cal, prot = _prot, fat = _fat, carbs = _carbs, fiber = _fiber;
+
+        if (_isComposite)
+        {
+            if (_ingredients.Count == 0) { _error = "Добавьте хотя бы один ингредиент"; return; }
+            var p = CalcCompositeNutrients();
+            cal = p.Cal; prot = p.Prot; fat = p.Fat; carbs = p.Carbs; fiber = p.Fiber;
+        }
+        else if (cal <= 0) { _error = "Укажите калорийность"; return; }
+
+        _saving = true; _error = null;
+
+        var ingredients = _isComposite
+            ? _ingredients.Select(i => new ProductIngredientDto(Guid.NewGuid(), i.ProductId, i.Name, i.Grams)).ToList()
+            : null;
+
+        var dto = new ProductDto(
+            _editId == Guid.Empty ? Guid.NewGuid() : _editId,
+            null, _name.Trim(),
+            _category, 1, _measureType,           // category, ownerType=private, measureType
+            _pieceWeightG > 0 ? _pieceWeightG : null,
+            _defaultServingG > 0 ? _defaultServingG : 100,
+            _isComposite, _totalYieldG > 0 ? _totalYieldG : null,
+            false, null, 0, 0,                     // isVerified, barcode, likes, dislikes
+            _gi,
+            cal, prot, fat, carbs, fiber,
+            _vitA, _vitC, _vitD,
+            _vitB1, _vitB2, _vitB3, _vitB4, _vitB5, _vitB6,
+            _vitB9, _vitB12, _vitE, _vitK, _vitH,
+            _calcium, _phosphorus, _potassium,
+            _sodium, _chlorine, _magnesium,
+            _sulfur, _iron, _zinc, _selenium, _iodine,
+            _manganese, _copper, _fluorine, _chromium,
+            ingredients, DateTime.UtcNow, false);
+
+        await Db.PutAsync("products", dto, pending: true);
+        _ = Sync.SyncAsync();
+
+        // Upload image if selected
+        if (_imageFile is not null)
+            await UploadImageAsync(dto.Id, _imageFile);
+
+        _saving = false; _editing = false;
+        _imageFile = null; _imagePreview = null;
+        await LoadMyProductsAsync();
+    }
+
+    private async Task DeleteAsync(ProductDto p)
+    {
+        await Db.PutAsync("products", p with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow }, pending: true);
+        _ = Sync.SyncAsync();
+        _myProducts.Remove(p);
+    }
+
+    private async Task ShareAsync(ProductDto p)
+    {
+        try
+        {
+            await Http.PostAsync($"/api/products/{p.Id}/share", null);
+            var updated = p with { OwnerType = 2 };
+            var idx = _myProducts.IndexOf(p);
+            if (idx >= 0) _myProducts[idx] = updated;
+        }
+        catch { }
+    }
+
+    private async Task CloneAsync(ProductSearchItemDto item)
+    {
+        try
+        {
+            var resp = await Http.PostAsync($"/api/products/{item.Product.Id}/clone", null);
+            if (resp.IsSuccessStatusCode)
+                await LoadMyProductsAsync();
+        }
+        catch { }
+    }
+
+    private async Task ReactAsync(ProductSearchItemDto item, int reaction)
+    {
+        int newReaction = item.MyReaction == reaction ? 0 : reaction;
+        try
+        {
+            await Http.PostAsJsonAsync($"/api/products/{item.Product.Id}/react", new { reaction = newReaction });
+            var idx = _globalResults.IndexOf(item);
+            if (idx >= 0)
+            {
+                var likes = item.Product.LikesCount + (newReaction == 1 ? 1 : 0) - (item.MyReaction == 1 ? 1 : 0);
+                var dislikes = item.Product.DislikesCount + (newReaction == -1 ? 1 : 0) - (item.MyReaction == -1 ? 1 : 0);
+                _globalResults[idx] = item with
+                {
+                    MyReaction = newReaction == 0 ? null : newReaction,
+                    Product = item.Product with { LikesCount = likes, DislikesCount = dislikes }
+                };
+            }
+        }
+        catch { }
+    }
+
+    // ── Ingredient helpers ────────────────────────────────────────────────────
+
+    private void SearchIngredients(ChangeEventArgs e)
+    {
+        _ingSearch = e.Value?.ToString() ?? string.Empty;
+        _ingResults = _ingSearch.Length < 2 ? [] :
+            _allProducts.Where(p => p.Name.Contains(_ingSearch, StringComparison.OrdinalIgnoreCase) && !p.IsComposite)
+                        .Take(8).ToList();
+    }
+
+    private void AddIngredient(ProductDto p)
+    {
+        _ingredients.Add(new IngredientItem(p.Id, p.Name, p.DefaultServingG));
+        _ingSearch = ""; _ingResults = [];
+    }
+
+    private void UpdateIngGrams(int idx, double g)
+    {
+        if (idx < _ingredients.Count)
+            _ingredients[idx] = _ingredients[idx] with { Grams = g };
+    }
+
+    private (double Cal, double Prot, double Fat, double Carbs, double Fiber) CalcCompositeNutrients()
+    {
+        double totalInput = _ingredients.Sum(i => i.Grams);
+        double yield = _totalYieldG > 0 ? _totalYieldG : totalInput;
+        if (yield <= 0) yield = 1;
+
+        double cal = 0, prot = 0, fat = 0, carbs = 0, fiber = 0;
+        var map = _allProducts.ToDictionary(p => p.Id);
+        foreach (var ing in _ingredients)
+        {
+            if (!map.TryGetValue(ing.ProductId, out var p)) continue;
+            double k = ing.Grams / 100.0;
+            cal += p.CaloriesPer100g * k; prot += p.ProteinPer100g * k;
+            fat += p.FatPer100g * k; carbs += p.CarbsPer100g * k; fiber += p.FiberPer100g * k;
+        }
+        double f = 100.0 / yield;
+        return (cal * f, prot * f, fat * f, carbs * f, fiber * f);
+    }
+
+    // ── UI helpers ────────────────────────────────────────────────────────────
+
+    private static string SourceLabel(string src) => src switch
+    {
+        "mine"   => "мой",
+        "base"   => "база",
+        "shared" => "от пользователей",
+        _ => src
+    };
+
+    private static string ProductImageUrl(Guid id) => $"/api/products/{id}/image";
+
+    private async Task UploadImageAsync(Guid productId, IBrowserFile file)
+    {
+        try
+        {
+            using var content = new MultipartFormDataContent();
+            var stream = file.OpenReadStream(2 * 1024 * 1024);
+            content.Add(new StreamContent(stream), "file", file.Name);
+            await Http.PostAsync($"/api/products/{productId}/image", content);
+        }
+        catch { /* ignore upload errors — product is saved */ }
+    }
+
+    RenderFragment ProductList(List<ProductDto> items, bool mine) =>
+        @<div style="display:flex;flex-direction:column;gap:.5rem">
+            @foreach (var p in items)
+            {
+                var imgUrl = ProductImageUrl(p.Id);
+                <div class="home-card" style="padding:.16rem .16rem">
+                    <div style="display:flex;align-items:flex-start;gap:.75rem">
+                        <img src="@imgUrl" alt=""
+                             style="width:64px;height:64px;object-fit:cover;border-radius:var(--r-md);border:1px solid var(--c-border);flex-shrink:0"
+                             onerror="this.style.display='none'" />
+                        <div style="flex:1;min-width:0">
+                            <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+                                <span style="font-weight:600;font-size:.95rem">@p.Name</span>
+                                @if (p.OwnerType == 2)
+                                { <span class="product-badge shared">поделился</span> }
+                                @if (p.IsComposite)
+                                { <span class="product-badge composite">составной</span> }
+                                @if (p.MeasureType == 1)
+                                { <span class="product-badge piece">штучный · @((p.PieceWeightG ?? 0).ToString("F0"))г/шт</span> }
+                            </div>
+                            <div style="font-size:.8rem;color:var(--c-text-muted);margin-top:.2rem">
+                                @p.CaloriesPer100g.ToString("F0") ккал ·
+                                Б&nbsp;@p.ProteinPer100g.ToString("F1") ·
+                                Ж&nbsp;@p.FatPer100g.ToString("F1") ·
+                                У&nbsp;@p.CarbsPer100g.ToString("F1")
+                                &nbsp;(на 100 г)
+                            </div>
+                            @if (p.IsComposite && p.Ingredients?.Count > 0)
+                            {
+                                <div style="font-size:.75rem;color:var(--c-text-muted);margin-top:.2rem">
+                                    @string.Join(", ", p.Ingredients.Select(i => i.IngredientName))
+                                </div>
+                            }
+                        </div>
+                        @if (mine)
+                        {
+                            <div style="display:flex;gap:.25rem">
+                                @if (p.OwnerType != 2)
+                                {
+                                    <button class="btn btn-ghost btn-icon btn-sm" title="Поделиться"
+                                            @onclick="() => ShareAsync(p)">🌐</button>
+                                }
+                                <button class="btn btn-ghost btn-icon btn-sm" title="Редактировать"
+                                        @onclick="() => OpenEdit(p)">✏️</button>
+                                <button class="btn btn-ghost btn-icon btn-sm" title="Удалить"
+                                        @onclick="() => DeleteAsync(p)">🗑</button>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>;
+
+    private static double? ParseNullable(object? v) =>
+        double.TryParse(v?.ToString(), out var d) && d > 0 ? d : null;
+
+    private record IngredientItem(Guid ProductId, string Name, double Grams);
+
+    // Needed for ProductSearchItemDto with expression
+    private record ProductSearchItemDto(
+        ProductDto Product, int UseCount, int? MyReaction, string Source);
+}

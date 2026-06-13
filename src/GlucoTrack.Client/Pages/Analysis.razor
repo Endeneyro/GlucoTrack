@@ -1,0 +1,204 @@
+@page "/analysis"
+@attribute [Authorize]
+@using GlucoTrack.Shared.Calculations
+@using GlucoTrack.Shared.DTOs.Sync
+@inject DbService Db
+
+<PageTitle>Аналитика — GlucoTrack</PageTitle>
+
+<div class="page">
+    <div class="page-header"><h2>📊 Аналитика</h2></div>
+
+    @if (_loading) { <p>Загрузка...</p> }
+    else
+    {
+        <!-- Period selector -->
+        <div class="period-tabs">
+            @foreach (var d in new[] { 7, 14, 30 })
+            {
+                <button class="period-tab @(_days == d ? "active" : "")" @onclick="() => SetPeriod(d)">@d дней</button>
+            }
+        </div>
+
+        <!-- TIR -->
+        <div class="settings-section">
+            <h3>⏱ Time In Range (TIR)</h3>
+            @if (_tir.TotalReadings == 0)
+            {
+                <p style="color:var(--text-muted)">Нет замеров глюкозы за период.</p>
+            }
+            else
+            {
+                <div class="tir-bar">
+                    @if (_tir.TbrPercent > 0)
+                        { <div class="tir-seg below" style="width:@_tir.TbrPercent%">@_tir.TbrPercent%</div> }
+                    @if (_tir.TirPercent > 0)
+                        { <div class="tir-seg in" style="width:@_tir.TirPercent%">@_tir.TirPercent%</div> }
+                    @if (_tir.TarPercent > 0)
+                        { <div class="tir-seg above" style="width:@_tir.TarPercent%">@_tir.TarPercent%</div> }
+                </div>
+                <div style="display:flex;gap:1.5rem;font-size:.875rem">
+                    <span style="color:var(--primary)">■ В норме @_tir.TirPercent%</span>
+                    <span style="color:#f59e0b">■ Выше @_tir.TarPercent%</span>
+                    <span style="color:#ef4444">■ Ниже @_tir.TbrPercent%</span>
+                </div>
+                <div style="margin-top:.75rem;font-size:.82rem;color:var(--text-muted)">
+                    Замеров: @_tir.TotalReadings · Диапазон: @_gLow–@_gHigh ммоль/л
+                </div>
+            }
+        </div>
+
+        <!-- Macros vs targets -->
+        <div class="settings-section">
+            <h3>🍽 БЖУ и калории (среднее в день)</h3>
+            @if (_dayCount == 0)
+            {
+                <p style="color:var(--text-muted)">Нет записей о питании за период.</p>
+            }
+            else
+            {
+                var avgCal = _sumCal / _dayCount;
+                var avgProt = _sumProt / _dayCount;
+                var avgFat = _sumFat / _dayCount;
+                var avgCarbs = _sumCarbs / _dayCount;
+
+                @MacroBar("Калории (ккал)", avgCal, _targetCal, "ккал")
+                @MacroBar("Белки", avgProt, _targetProt, "г")
+                @MacroBar("Жиры", avgFat, _targetFat, "г")
+                @MacroBar("Углеводы", avgCarbs, _targetCarbs, "г")
+
+                <div style="font-size:.8rem;color:var(--text-muted);margin-top:.5rem">
+                    Среднее за @_dayCount @PluralDays(_dayCount) с записями
+                </div>
+            }
+        </div>
+
+        <!-- Vitamins/Minerals -->
+        @if (_sumVitC > 0 || _sumCalcium > 0)
+        {
+            <div class="settings-section">
+                <h3>🌿 Витамины и минералы (среднее в день)</h3>
+                <div class="nutrient-grid">
+                    @VitaminBar("Витамин C", _sumVitC / Math.Max(1, _dayCount), 90, "мг")
+                    @VitaminBar("Витамин A", _sumVitA / Math.Max(1, _dayCount), 0.9, "мг")
+                    @VitaminBar("Витамин D", _sumVitD / Math.Max(1, _dayCount), 0.015, "мкг")
+                    @VitaminBar("Витамин B12", _sumVitB12 / Math.Max(1, _dayCount), 0.0024, "мкг")
+                    @VitaminBar("Кальций", _sumCalcium / Math.Max(1, _dayCount), 1000, "мг")
+                    @VitaminBar("Железо", _sumIron / Math.Max(1, _dayCount), 8, "мг")
+                    @VitaminBar("Магний", _sumMagnesium / Math.Max(1, _dayCount), 400, "мг")
+                    @VitaminBar("Калий", _sumPotassium / Math.Max(1, _dayCount), 3500, "мг")
+                </div>
+            </div>
+        }
+    }
+</div>
+
+@* Inline components for progress bars *@
+@code {
+    // MacroBar and VitaminBar are rendered inline via RenderFragment helpers
+}
+
+<style>
+    .macro-row { margin-bottom: .875rem; }
+    .macro-label { display: flex; justify-content: space-between; font-size: .82rem; margin-bottom: .3rem; }
+</style>
+
+@code {
+    private int _days = 7;
+    private bool _loading = true;
+    private TirResult _tir = new(0, 0, 0, 0);
+    private double _gLow = 3.9, _gHigh = 10.0;
+
+    // Targets from settings
+    private double _targetCal = 2000, _targetProt = 80, _targetFat = 67, _targetCarbs = 250;
+
+    // Accumulated sums
+    private int _dayCount;
+    private double _sumCal, _sumProt, _sumFat, _sumCarbs;
+    private double _sumVitC, _sumVitA, _sumVitD, _sumVitB12;
+    private double _sumCalcium, _sumIron, _sumMagnesium, _sumPotassium;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var settings = (await Db.GetAllAsync<GlucoTrack.Shared.DTOs.Sync.UserSettingsDto>("settings")).FirstOrDefault();
+        if (settings is not null)
+        {
+            _gLow = settings.TargetGlucoseLow; _gHigh = settings.TargetGlucoseHigh;
+            _targetCal = settings.DailyCalories; _targetProt = settings.DailyProtein;
+            _targetFat = settings.DailyFat; _targetCarbs = settings.DailyCarbs;
+        }
+        await LoadPeriodAsync();
+        _loading = false;
+    }
+
+    private async Task SetPeriod(int days) { _days = days; await LoadPeriodAsync(); }
+
+    private async Task LoadPeriodAsync()
+    {
+        var since = DateTime.UtcNow.Date.AddDays(-_days);
+
+        // TIR
+        var glucoseAll = await Db.GetAllAsync<GlucoseReadingDto>("glucose");
+        var vals = glucoseAll
+            .Where(g => !g.IsDeleted && g.MeasuredAtUtc >= since)
+            .Select(g => g.ValueMmol).ToList();
+        _tir = TirCalculator.Calculate(vals, _gLow, _gHigh);
+
+        // Meals + nutrition
+        var meals = (await Db.GetAllAsync<MealEntryDto>("meals"))
+            .Where(m => !m.IsDeleted && m.Date >= DateOnly.FromDateTime(since)).ToList();
+        var products = (await Db.GetAllAsync<ProductDto>("products"))
+            .Where(p => !p.IsDeleted).ToDictionary(p => p.Id);
+
+        // Sum by day
+        var byDay = meals.GroupBy(m => m.Date);
+        _dayCount = 0; _sumCal = _sumProt = _sumFat = _sumCarbs = 0;
+        _sumVitC = _sumVitA = _sumVitD = _sumVitB12 = 0;
+        _sumCalcium = _sumIron = _sumMagnesium = _sumPotassium = 0;
+
+        foreach (var day in byDay)
+        {
+            _dayCount++;
+            foreach (var entry in day)
+            {
+                if (!products.TryGetValue(entry.ProductId, out var p)) continue;
+                var k = entry.Grams / 100.0;
+                _sumCal += p.CaloriesPer100g * k; _sumProt += p.ProteinPer100g * k;
+                _sumFat += p.FatPer100g * k; _sumCarbs += p.CarbsPer100g * k;
+                _sumVitC += (p.VitaminC ?? 0) * k; _sumVitA += (p.VitaminA ?? 0) * k;
+                _sumVitD += (p.VitaminD ?? 0) * k; _sumVitB12 += (p.VitaminB12 ?? 0) * k;
+                _sumCalcium += (p.Calcium ?? 0) * k; _sumIron += (p.Iron ?? 0) * k;
+                _sumMagnesium += (p.Magnesium ?? 0) * k; _sumPotassium += (p.Potassium ?? 0) * k;
+            }
+        }
+    }
+
+    private static string PluralDays(int n) => n is 1 ? "день" : n < 5 ? "дня" : "дней";
+}
+
+@* Helper render fragments for progress bars *@
+@functions {
+    RenderFragment MacroBar(string Label, double Value, double Target, string Unit) =>
+        @<div class="macro-row">
+            <div class="macro-label">
+                <span>@Label</span>
+                <span>@Value.ToString("F0") / @Target @Unit</span>
+            </div>
+            <div class="progress-bar">
+                <div class="progress-fill @(Value / Target > 1.1 ? "over" : Value / Target > 0.9 ? "" : "warn")"
+                     style="width:@(Math.Min(100, Value / Target * 100).ToString("F0"))%"></div>
+            </div>
+        </div>;
+
+    RenderFragment VitaminBar(string Label, double Value, double Target, string Unit) =>
+        @<div class="macro-row">
+            <div class="macro-label">
+                <span>@Label</span>
+                <span>@Value.ToString("F1") / @Target @Unit</span>
+            </div>
+            <div class="progress-bar">
+                <div class="progress-fill @(Value / Target > 1.1 ? "over" : Value / Target > 0.9 ? "" : "warn")"
+                     style="width:@(Math.Min(100, Value / Target * 100).ToString("F0"))%"></div>
+            </div>
+        </div>;
+}

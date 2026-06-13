@@ -1,0 +1,189 @@
+@page "/glucose"
+@attribute [Authorize]
+@using GlucoTrack.Client.Models
+@using GlucoTrack.Shared.DTOs.Sync
+@inject DbService Db
+@inject SyncService Sync
+@inject NavigationManager Nav
+@inject ConfirmService Confirm
+@inject UndoService Undo
+
+<PageTitle>Глюкоза — GlucoTrack</PageTitle>
+
+<div class="page">
+    <div class="page-header">
+        <h2>📈 Глюкоза</h2>
+        @if (EventId == null)
+        {
+            <button class="btn btn-primary btn-sm" @onclick="() => _showForm = !_showForm">
+                @(_showForm ? "Отмена" : "+ Добавить замер")
+            </button>
+        }
+    </div>
+
+    @if (_linkedEvent is not null || EventId != null)
+    {
+        <div style="background:var(--c-primary-ultra);border:1.5px solid var(--c-primary-light);border-radius:var(--r-md);padding:.75rem 1rem;margin-bottom:1rem;display:flex;align-items:center;gap:.75rem">
+            <span style="font-size:1.2rem">📅</span>
+            <div style="flex:1">
+                <div style="font-weight:600;font-size:.9rem">Событие: Измерение сахара</div>
+                @if (_linkedEvent is not null)
+                {
+                    <div style="font-size:.8rem;color:var(--c-text-muted)">
+                        Запланировано на @_linkedEvent.PlannedAtUtc.ToLocalTime().ToString("HH:mm")
+                    </div>
+                }
+            </div>
+            <button class="btn btn-ghost btn-sm" @onclick="CancelEvent">✕</button>
+        </div>
+    }
+
+    @if (_showForm || EventId != null)
+    {
+        <div class="form-card" style="margin-bottom:1.5rem">
+            <h4>@(EventId != null ? "Введите результат замера" : "Новый замер")</h4>
+            <div class="input-row">
+                <div class="form-group">
+                    <label>Дата и время</label>
+                    <input class="form-control" type="datetime-local" @bind="_newDateTime" />
+                </div>
+                <div class="form-group">
+                    <label>Глюкоза (ммоль/л)</label>
+                    <input class="form-control" type="number" min="1" max="30" step="0.1" @bind="_newValue" />
+                </div>
+            </div>
+            @if (_formError is not null) { <div class="alert alert-error">@_formError</div> }
+            <div style="display:flex;gap:.5rem">
+                <button class="btn btn-primary btn-sm" @onclick="AddReadingAsync">
+                    @(EventId != null ? "✓ Сохранить и закрыть событие" : "Сохранить")
+                </button>
+                @if (EventId != null)
+                {
+                    <button class="btn btn-ghost btn-sm" @onclick="CancelEvent">Отмена</button>
+                }
+            </div>
+        </div>
+    }
+
+    @if (_readings.Count > 0)
+    {
+        <div class="stats-bar" style="margin-bottom:1.5rem">
+            <div class="stat-card"><div class="stat-value">@_avg.ToString("F1")</div><div class="stat-label">Среднее</div></div>
+            <div class="stat-card"><div class="stat-value g-ok">@_min.ToString("F1")</div><div class="stat-label">Минимум</div></div>
+            <div class="stat-card"><div class="stat-value @(_max > _gHigh ? "g-high" : "g-ok")">@_max.ToString("F1")</div><div class="stat-label">Максимум</div></div>
+            <div class="stat-card"><div class="stat-value">@_readings.Count</div><div class="stat-label">Замеров</div></div>
+        </div>
+
+        <div class="entry-list">
+            @foreach (var r in _readings.OrderByDescending(x => x.MeasuredAtUtc))
+            {
+                <div class="entry-item">
+                    <div class="entry-time">
+                        <div>@r.MeasuredAtUtc.ToLocalTime().ToString("dd.MM")</div>
+                        <div>@r.MeasuredAtUtc.ToLocalTime().ToString("HH:mm")</div>
+                    </div>
+                    <div class="entry-main">
+                        <div class="entry-value @GlucoseClass(r.ValueMmol)">@r.ValueMmol.ToString("F1") ммоль/л</div>
+                        <div class="entry-sub">@GlucoseLabel(r.ValueMmol)</div>
+                    </div>
+                    <button class="btn btn-ghost btn-sm btn-icon" @onclick="() => DeleteAsync(r.Id)">✕</button>
+                </div>
+            }
+        </div>
+    }
+    else if (!_loading)
+    {
+        <div class="placeholder-page" style="min-height:40vh">
+            <div class="placeholder-icon">📈</div>
+            <h2>Нет записей</h2>
+            <p>Добавьте первый замер глюкозы</p>
+        </div>
+    }
+</div>
+
+@code {
+    [SupplyParameterFromQuery] public Guid? EventId { get; set; }
+    [SupplyParameterFromQuery] public long? EventTime { get; set; }
+
+    private List<GlucoseReadingDto> _readings = [];
+    private PlannedEventDto? _linkedEvent;
+    private bool _loading = true, _showForm;
+    private string? _formError;
+    private DateTime _newDateTime = DateTime.Now;
+    private double _newValue = 6.0;
+    private double _gLow = 3.9, _gHigh = 10.0;
+    private double _avg, _min, _max;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var settings = (await Db.GetAllAsync<UserSettingsDto>("settings")).FirstOrDefault();
+        if (settings is not null) { _gLow = settings.TargetGlucoseLow; _gHigh = settings.TargetGlucoseHigh; }
+
+        _readings = (await Db.GetAllAsync<GlucoseReadingDto>("glucose")).Where(r => !r.IsDeleted).ToList();
+        CalcStats();
+
+        if (EventId.HasValue)
+        {
+            var events = await Db.GetAllAsync<PlannedEventDto>("planned_events");
+            _linkedEvent = events.FirstOrDefault(e => e.Id == EventId.Value);
+            if (_linkedEvent is not null)
+                _newDateTime = _linkedEvent.PlannedAtUtc.ToLocalTime();
+            _showForm = true;
+        }
+
+        _loading = false;
+    }
+
+    private void CalcStats()
+    {
+        if (_readings.Count == 0) return;
+        var v = _readings.Select(r => r.ValueMmol).ToList();
+        _avg = v.Average(); _min = v.Min(); _max = v.Max();
+    }
+
+    private async Task AddReadingAsync()
+    {
+        _formError = null;
+        if (_newValue is < 1 or > 30) { _formError = "Глюкоза должна быть от 1 до 30 ммоль/л"; return; }
+
+        var dto = new GlucoseReadingDto(Guid.NewGuid(), _newDateTime.ToUniversalTime(), _newValue, DateTime.UtcNow, false);
+        await Db.PutAsync("glucose", dto, pending: true);
+        _readings.Add(dto); CalcStats();
+        _ = Sync.SyncAsync();
+
+        if (EventId.HasValue && _linkedEvent is not null)
+        {
+            await Db.PutAsync("planned_events",
+                _linkedEvent with { IsDone = true, UpdatedAtUtc = DateTime.UtcNow },
+                pending: false);
+            Nav.NavigateTo("/calendar");
+            return;
+        }
+
+        _showForm = false; _newValue = 6.0;
+    }
+
+    private void CancelEvent() => Nav.NavigateTo("/calendar");
+
+    private async Task DeleteAsync(Guid id)
+    {
+        var item = _readings.First(r => r.Id == id);
+        var label = $"Замер {item.ValueMmol:F1} ммоль/л";
+        if (!await Confirm.ConfirmAsync("Удалить запись?", $"{label} — {item.MeasuredAtUtc.ToLocalTime():HH:mm}")) return;
+
+        await Db.PutAsync("glucose", item with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow }, pending: true);
+        _readings.RemoveAll(r => r.Id == id); CalcStats();
+        _ = Sync.SyncAsync();
+
+        Undo.Push($"Удалено: {label}", async () =>
+        {
+            await Db.PutAsync("glucose", item with { UpdatedAtUtc = DateTime.UtcNow }, pending: true);
+            _readings.Add(item); CalcStats();
+            _ = Sync.SyncAsync();
+            await InvokeAsync(StateHasChanged);
+        });
+    }
+
+    private string GlucoseClass(double v) => v < _gLow ? "g-low" : v > _gHigh ? "g-high" : "g-ok";
+    private string GlucoseLabel(double v) => v < _gLow ? "Ниже нормы" : v > _gHigh ? "Выше нормы" : "В норме";
+}

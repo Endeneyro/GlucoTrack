@@ -1,0 +1,473 @@
+@page "/"
+@attribute [Authorize]
+@using GlucoTrack.Client.Models
+@using GlucoTrack.Shared.DTOs.Sync
+@using GlucoTrack.Shared.Calculations
+@using Microsoft.AspNetCore.Components.Authorization
+@inject DbService Db
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>Главная — GlucoTrack</PageTitle>
+
+<style>
+    /* ── Layout grids ── */
+    .dash-row-3 { display: grid !important; grid-template-columns: repeat(3,1fr) !important; gap: 1rem; margin-bottom: 1rem; }
+    .dash-row-2 { display: grid !important; grid-template-columns: 1fr 1fr !important; gap: 1rem; margin-bottom: 1rem; }
+    .dash-row-4 { display: grid !important; grid-template-columns: repeat(4,1fr) !important; gap: 1rem; }
+    @@media (max-width: 860px) { .dash-row-3,.dash-row-2,.dash-row-4 { grid-template-columns:1fr !important; } }
+
+    /* ── Cards ── */
+    .home-card { background:#fff; border:1px solid #E4EAFB; border-radius:16px; padding:1rem 1.25rem; box-shadow:0 2px 8px rgba(59,130,246,.09); display:flex; flex-direction:column; gap:.5rem; min-width:0; }
+    .home-card-title { font-size:.78rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:#6B7FA3; display:flex; justify-content:space-between; align-items:center; margin-bottom:0; }
+    .home-card-title a { font-size:.78rem; font-weight:500; text-transform:none; letter-spacing:0; color:#3B82F6; text-decoration:none; }
+
+    /* ── Header ── */
+    .dash-header { margin-bottom:1.25rem; }
+    .dash-greeting { font-size:1.75rem; font-weight:800; color:#1A2B4A; margin:0 0 .2rem; }
+    .dash-subdate { font-size:.875rem; color:#6B7FA3; margin:0; }
+    .dash-date-pill { display:none; }
+
+    /* ── Calories ring ── */
+    .circle-progress-wrap { display:flex; gap:1rem; align-items:center; }
+    .circle-svg { width:90px; height:90px; display:block; flex-shrink:0; }
+    .circle-label { font-size:.68rem; text-align:center; color:#6B7FA3; margin-top:.2rem; }
+
+    /* ── Macro bars ── */
+    .macro-bars { display:flex; flex-direction:column; gap:.6rem; }
+    .macro-bar-row { display:flex; flex-direction:column; gap:.2rem; }
+    .macro-bar-head { display:flex; justify-content:space-between; }
+    .macro-bar-name { font-size:.78rem; color:#6B7FA3; }
+    .macro-bar-val  { font-size:.78rem; color:#1A2B4A; }
+    .mbar { height:6px; background:#E4EAFB; border-radius:99px; overflow:hidden; }
+    .mbar-fill { height:100%; border-radius:99px; transition:width .4s; }
+    .mbar-fill.protein { background:#3B82F6; }
+    .mbar-fill.fat     { background:#F59E0B; }
+    .mbar-fill.carbs   { background:#10B981; }
+    .mbar-fill.over    { background:#EF4444; }
+
+    /* ── Glucose stats ── */
+    .stats-bar { display:grid; gap:.4rem; margin-bottom:0; }
+    .stat-card { background:#F4F7FF; border-radius:10px; padding:.4rem .5rem; text-align:center; border:none; box-shadow:none; }
+    .stat-value { font-size:1rem; font-weight:700; color:#1A2B4A; }
+    .stat-label { font-size:.65rem; color:#6B7FA3; }
+    .g-ok   { color:#10B981; }
+    .g-low  { color:#F59E0B; }
+    .g-high { color:#EF4444; }
+
+    /* ── Mini calendar ── */
+    .mini-cal-head { display:grid !important; grid-template-columns:repeat(7,1fr) !important; text-align:center; font-size:.65rem; font-weight:700; color:#6B7FA3; margin-bottom:.25rem; }
+    .mini-cal-days { display:grid !important; grid-template-columns:repeat(7,1fr) !important; gap:1px; }
+    .mini-cal-cell { display:flex; flex-direction:column; align-items:center; padding:.15rem 0; border-radius:6px; }
+    .mini-cal-num  { font-size:.72rem; line-height:1.4; color:#1A2B4A; }
+    .mini-cal-other .mini-cal-num { color:#A0AEC0; }
+    .mini-cal-today .mini-cal-num { background:#3B82F6; color:#fff; border-radius:50%; width:1.35rem; height:1.35rem; display:flex; align-items:center; justify-content:center; font-weight:700; }
+    .mini-cal-dot  { width:5px; height:5px; border-radius:50%; margin-top:1px; }
+    .dot-ok   { background:#10B981; }
+    .dot-warn { background:#F59E0B; }
+    .dot-bad  { background:#EF4444; }
+    .dot-none { background:#E4EAFB; }
+    .mini-cal-legend { display:flex; flex-wrap:wrap; gap:.5rem; margin-top:.5rem; font-size:.68rem; color:#6B7FA3; }
+    .mini-cal-legend span { display:flex; align-items:center; gap:.3rem; }
+
+    /* ── Meal list ── */
+    .meal-type-item { display:flex; align-items:center; gap:.75rem; padding:.55rem 0; border-bottom:1px solid #E4EAFB; }
+    .meal-type-item:last-child { border-bottom:none; }
+    .meal-type-icon { font-size:1.3rem; }
+    .meal-type-name { font-size:.875rem; font-weight:600; color:#1A2B4A; }
+    .meal-type-time { font-size:.7rem; color:#6B7FA3; }
+    .meal-type-kcal { font-size:.875rem; font-weight:700; color:#3B82F6; white-space:nowrap; }
+
+    /* ── Sparklines ── */
+    .sparkline-card { background:#F4F7FF; border-radius:12px; padding:.75rem; display:flex; flex-direction:column; gap:.2rem; }
+    .sparkline-label { font-size:.7rem; color:#6B7FA3; font-weight:600; }
+    .sparkline-val   { font-size:1.25rem; font-weight:800; font-variant-emoji:text; font-variant-numeric:tabular-nums; }
+    .sparkline-svg   { width:100%; height:40px; display:block; margin-top:.2rem; }
+</style>
+
+@if (_loading)
+{
+    <p style="color:var(--c-text-muted);padding:2rem">Загрузка...</p>
+}
+else
+{
+    <!-- Header -->
+    <div class="dash-header">
+        <div>
+            <h1 class="dash-greeting">@_greeting, @_userName!</h1>
+            <p class="dash-subdate">@DateTime.Today.ToString("dddd, d MMMM yyyy", _ru)</p>
+        </div>
+    </div>
+
+    <!-- Row 1: Calories · БЖУ · Глюкоза -->
+    <div class="dash-row-3">
+
+        <!-- Калории -->
+        <div class="home-card">
+            <div class="home-card-title">Калории <a href="/meals">Подробнее ›</a></div>
+            <div class="circle-progress-wrap">
+                @{
+                    double calPct = _targetCal > 0 ? Math.Min(100, _todayCal / _targetCal * 100) : 0;
+                    const double r = 50; double circ = 2 * Math.PI * r;
+                    double offset = circ * (1 - calPct / 100.0);
+                }
+                <svg class="circle-svg" viewBox="0 0 120 120">
+                    <circle cx="60" cy="60" r="@r.ToString(_inv)" fill="none" stroke="#E4EAFB" stroke-width="12"/>
+                    <circle cx="60" cy="60" r="@r.ToString(_inv)" fill="none"
+                            stroke="@(calPct > 100 ? "#EF4444" : "#3B82F6")"
+                            stroke-width="12"
+                            stroke-dasharray="@circ.ToString("F1", _inv)"
+                            stroke-dashoffset="@offset.ToString("F1", _inv)"
+                            stroke-linecap="round"
+                            transform="rotate(-90 60 60)"/>
+                    <text x="60" y="56" text-anchor="middle" font-size="18" font-weight="bold" fill="#1A2B4A" font-family="sans-serif">@_todayCal.ToString("F0")</text>
+                    <text x="60" y="70" text-anchor="middle" font-size="8" fill="#6B7FA3" font-family="sans-serif">ккал</text>
+                </svg>
+                <div style="flex:1;min-width:0">
+                    <div style="font-size:.78rem;color:#6B7FA3;margin-bottom:.15rem">Цель: @_targetCal.ToString("F0") ккал</div>
+                    <div style="font-size:1.5rem;font-weight:800;color:#3B82F6;line-height:1.1">@_todayCal.ToString("F0")</div>
+                    <div style="font-size:.75rem;color:#6B7FA3">съедено</div>
+                    <div style="margin-top:.6rem;font-size:.8rem;color:#6B7FA3">Осталось <b style="color:#1A2B4A">@(Math.Max(0, _targetCal - _todayCal).ToString("F0")) ккал</b></div>
+                    <div style="font-size:.8rem;color:#6B7FA3">ХЕ <b style="color:#1A2B4A">@XeCalculator.CarbsToXe(_todayCarbs).ToString("F1")</b></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- БЖУ -->
+        <div class="home-card">
+            <div class="home-card-title">БЖУ сегодня</div>
+            <div class="macro-bars">
+                @MacroBar("Белки",    _todayProt,  _targetProt,  "г", "protein")
+                @MacroBar("Жиры",     _todayFat,   _targetFat,   "г", "fat")
+                @MacroBar("Углеводы", _todayCarbs, _targetCarbs, "г", "carbs")
+            </div>
+        </div>
+
+        <!-- Глюкоза -->
+        <div class="home-card">
+            <div class="home-card-title">Глюкоза сегодня <a href="/glucose">Подробнее ›</a></div>
+            @if (_todayGlucose.Count > 0)
+            {
+                var last = _todayGlucose.Last();
+                var cls  = last.ValueMmol < _gLow ? "g-low" : last.ValueMmol > _gHigh ? "g-high" : "g-ok";
+                <div style="text-align:center;padding:.5rem 0">
+                    <div style="font-size:2.5rem;font-weight:800" class="@cls">@last.ValueMmol.ToString("F1")</div>
+                    <div style="font-size:.8rem;color:var(--c-text-muted)">ммоль/л · @last.MeasuredAtUtc.ToLocalTime().ToString("HH:mm")</div>
+                </div>
+                <div class="stats-bar" style="margin-bottom:0;grid-template-columns:repeat(3,1fr)">
+                    <div class="stat-card"><div class="stat-value">@_todayGlucose.Min(g => g.ValueMmol).ToString("F1")</div><div class="stat-label">Мин</div></div>
+                    <div class="stat-card"><div class="stat-value">@(_todayGlucose.Average(g => g.ValueMmol).ToString("F1"))</div><div class="stat-label">Средн</div></div>
+                    <div class="stat-card"><div class="stat-value">@_todayGlucose.Max(g => g.ValueMmol).ToString("F1")</div><div class="stat-label">Макс</div></div>
+                </div>
+            }
+            else
+            {
+                <div style="text-align:center;padding:1.5rem 0;color:#6B7FA3">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#A0AEC0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin:0 auto .75rem;display:block">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                    </svg>
+                    <div style="font-size:.875rem">Нет замеров сегодня</div>
+                    <a href="/glucose" style="color:#3B82F6;font-size:.85rem;margin-top:.5rem;display:inline-block">Добавить →</a>
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- Row 2: Мини-календарь + Приёмы пищи -->
+    <div class="dash-row-2">
+
+        <!-- Мини-календарь -->
+        <div class="home-card">
+            <div class="home-card-title">
+                Календарь
+                <a href="/calendar">Перейти ›</a>
+            </div>
+            <div style="font-size:.9rem;font-weight:600;text-align:center;margin-bottom:.5rem;color:var(--c-text)">
+                @_calMonth.ToString("MMMM yyyy", _ru)
+            </div>
+            <div class="mini-cal">
+                <div class="mini-cal-head">
+                    @foreach (var d in new[]{"ПН","ВТ","СР","ЧТ","ПТ","СБ","ВС"})
+                    { <div>@d</div> }
+                </div>
+                <div class="mini-cal-days">
+                    @foreach (var day in _miniCalDays)
+                    {
+                        var inMonth = day.Month == _calMonth.Month;
+                        var isToday = day == DateOnly.FromDateTime(DateTime.Today);
+                        var dotClass = inMonth ? GetDotClass(day) : "";
+                        <div class="mini-cal-cell @(isToday ? "mini-cal-today" : "") @(inMonth ? "" : "mini-cal-other")">
+                            <div class="mini-cal-num">@day.Day</div>
+                            @if (inMonth && dotClass != "")
+                            {
+                                <div class="mini-cal-dot @dotClass"></div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+            <div class="mini-cal-legend">
+                <span><span class="mini-cal-dot dot-ok"></span> В норме</span>
+                <span><span class="mini-cal-dot dot-warn"></span> Отклонение</span>
+                <span><span class="mini-cal-dot dot-bad"></span> Превышение</span>
+                <span><span class="mini-cal-dot dot-none"></span> Нет данных</span>
+            </div>
+        </div>
+
+        <!-- Приёмы пищи -->
+        <div class="home-card">
+            <div class="home-card-title">
+                Приёмы пищи
+                <a href="/meals" style="font-weight:500">+ Добавить</a>
+            </div>
+            @if (_mealGroups.Count > 0)
+            {
+                @foreach (var g in _mealGroups)
+                {
+                    <div class="meal-type-item">
+                        <span class="meal-type-icon">@g.Icon</span>
+                        <div style="flex:1">
+                            <div class="meal-type-name">@g.Name</div>
+                            <div class="meal-type-time">@g.TimeRange</div>
+                        </div>
+                        <div class="meal-type-kcal">@g.Calories.ToString("F0") ккал</div>
+                        <a href="/meals" style="color:var(--c-text-muted);font-size:.85rem;margin-left:.5rem">›</a>
+                    </div>
+                }
+            }
+            else
+            {
+                <div style="text-align:center;padding:2rem 0;color:#6B7FA3">
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#A0AEC0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin:0 auto .75rem;display:block">
+                        <path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3zm0 0v7"/>
+                    </svg>
+                    <div style="font-size:.875rem">Нет приёмов пищи сегодня</div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- Row 3: Динамика за неделю -->
+    <div class="home-card" style="margin-bottom:1rem">
+        <div class="home-card-title">
+            Динамика за неделю
+            <span style="font-size:.78rem;font-weight:400;color:var(--c-text-muted)">последние 7 дней</span>
+        </div>
+        <div class="dash-row-4">
+            @SparkCard("Калории (ср.)", _weeklyKcal,   "ккал", "var(--c-primary)")
+            @SparkCard("Белки (ср.)",   _weeklyProt,   "г",    "var(--c-primary)")
+            @SparkCard("Жиры (ср.)",    _weeklyFat,    "г",    "var(--c-warning)")
+            @SparkCard("Углеводы (ср.)",_weeklyCarbs,  "г",    "var(--c-success)")
+        </div>
+    </div>
+}
+
+@code {
+    private static readonly System.Globalization.CultureInfo _ru  = new("ru-RU");
+    private static readonly System.Globalization.CultureInfo _inv = System.Globalization.CultureInfo.InvariantCulture;
+    private bool _loading = true;
+
+    private string _greeting = "Добрый день";
+    private string _userName = "Пользователь";
+
+    private double _targetCal = 2000, _targetProt = 80, _targetFat = 67, _targetCarbs = 250;
+    private double _gLow = 3.9, _gHigh = 10.0;
+    private double _todayCal, _todayProt, _todayFat, _todayCarbs;
+    private List<GlucoseReadingDto> _todayGlucose = [];
+
+    // Mini-calendar
+    private DateTime _calMonth = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private List<DateOnly> _miniCalDays = [];
+    private Dictionary<DateOnly, List<GlucoseReadingDto>> _glucoseByDate = [];
+
+    // Meal groups
+    private List<MealGroup> _mealGroups = [];
+
+    // Weekly sparklines (7 daily values)
+    private List<double> _weeklyKcal  = [];
+    private List<double> _weeklyProt  = [];
+    private List<double> _weeklyFat   = [];
+    private List<double> _weeklyCarbs = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _greeting = GetGreeting();
+
+        var authState = await AuthProvider.GetAuthenticationStateAsync();
+        var email = authState.User.FindFirst(
+            c => c.Type == System.Security.Claims.ClaimTypes.Email ||
+                 c.Type == "email")?.Value;
+        if (!string.IsNullOrEmpty(email))
+        {
+            var namePart = email.Split('@')[0];
+            _userName = char.ToUpper(namePart[0]) + namePart[1..];
+        }
+
+        var settings = (await Db.GetAllAsync<UserSettingsDto>("settings")).FirstOrDefault();
+        if (settings is not null)
+        {
+            _targetCal   = settings.DailyCalories; _targetProt = settings.DailyProtein;
+            _targetFat   = settings.DailyFat;      _targetCarbs = settings.DailyCarbs;
+            _gLow        = settings.TargetGlucoseLow;
+            _gHigh       = settings.TargetGlucoseHigh;
+        }
+
+        var today    = DateOnly.FromDateTime(DateTime.Today);
+        var products = (await Db.GetAllAsync<ProductDto>("products"))
+            .Where(p => !p.IsDeleted).ToDictionary(p => p.Id);
+        var allMeals = (await Db.GetAllAsync<MealEntryDto>("meals"))
+            .Where(m => !m.IsDeleted).ToList();
+        var todayMeals = allMeals.Where(m => m.Date == today).ToList();
+
+        foreach (var e in todayMeals)
+        {
+            if (!products.TryGetValue(e.ProductId, out var p)) continue;
+            var k = e.Grams / 100.0;
+            _todayCal   += p.CaloriesPer100g * k; _todayProt  += p.ProteinPer100g * k;
+            _todayFat   += p.FatPer100g * k;      _todayCarbs += p.CarbsPer100g * k;
+        }
+
+        _todayGlucose = (await Db.GetAllAsync<GlucoseReadingDto>("glucose"))
+            .Where(g => !g.IsDeleted && g.MeasuredAtUtc >= DateTime.UtcNow.Date)
+            .OrderBy(g => g.MeasuredAtUtc).ToList();
+
+        // Mini-calendar — build days and load glucose for current month
+        BuildMiniCal();
+        var monthStart = new DateTime(_calMonth.Year, _calMonth.Month, 1, 0, 0, 0, DateTimeKind.Local).ToUniversalTime();
+        var monthEnd   = monthStart.AddMonths(1);
+        var allGlucose = (await Db.GetAllAsync<GlucoseReadingDto>("glucose"))
+            .Where(g => !g.IsDeleted && g.MeasuredAtUtc >= monthStart && g.MeasuredAtUtc < monthEnd)
+            .ToList();
+        _glucoseByDate = allGlucose
+            .GroupBy(g => DateOnly.FromDateTime(g.MeasuredAtUtc.ToLocalTime()))
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        // Meal groups
+        BuildMealGroups(todayMeals, products);
+
+        // Weekly sparklines — last 7 days
+        for (int i = 6; i >= 0; i--)
+        {
+            var d = today.AddDays(-i);
+            var dayMeals = allMeals.Where(m => m.Date == d).ToList();
+            double kcal = 0, prot = 0, fat = 0, carbs = 0;
+            foreach (var m in dayMeals)
+            {
+                if (!products.TryGetValue(m.ProductId, out var p)) continue;
+                var k = m.Grams / 100.0;
+                kcal += p.CaloriesPer100g * k; prot  += p.ProteinPer100g * k;
+                fat  += p.FatPer100g * k;      carbs += p.CarbsPer100g * k;
+            }
+            _weeklyKcal.Add(kcal); _weeklyProt.Add(prot);
+            _weeklyFat.Add(fat);   _weeklyCarbs.Add(carbs);
+        }
+
+        _loading = false;
+    }
+
+    private void BuildMiniCal()
+    {
+        _miniCalDays = [];
+        var dow = (int)_calMonth.DayOfWeek;
+        dow = dow == 0 ? 6 : dow - 1;
+        var start = _calMonth.AddDays(-dow);
+        for (int i = 0; i < 42; i++)
+            _miniCalDays.Add(DateOnly.FromDateTime(start.AddDays(i)));
+    }
+
+    private void BuildMealGroups(List<MealEntryDto> meals, Dictionary<Guid, ProductDto> products)
+    {
+        _mealGroups = [];
+        var groups = new[]
+        {
+            (Name:"Завтрак",  Icon:"🌅", Min:5,  Max:10, Range:"05:00 – 10:59"),
+            (Name:"Обед",     Icon:"☀️", Min:11, Max:15, Range:"11:00 – 15:59"),
+            (Name:"Ужин",     Icon:"🌙", Min:16, Max:21, Range:"16:00 – 21:59"),
+            (Name:"Перекус",  Icon:"🍎", Min:-1, Max:-1, Range:"другое время"),
+        };
+
+        foreach (var g in groups)
+        {
+            List<MealEntryDto> grouped;
+            if (g.Min == -1)
+                grouped = meals.Where(m => m.Time.Hour < 5 || m.Time.Hour > 21).ToList();
+            else
+                grouped = meals.Where(m => m.Time.Hour >= g.Min && m.Time.Hour <= g.Max).ToList();
+
+            if (grouped.Count == 0) continue;
+            double kcal = 0;
+            foreach (var m in grouped)
+                if (products.TryGetValue(m.ProductId, out var p))
+                    kcal += p.CaloriesPer100g * m.Grams / 100.0;
+            _mealGroups.Add(new MealGroup(g.Name, g.Icon, g.Range, kcal));
+        }
+    }
+
+    private string GetDotClass(DateOnly day)
+    {
+        if (day > DateOnly.FromDateTime(DateTime.Today)) return "";
+        if (!_glucoseByDate.TryGetValue(day, out var readings) || readings.Count == 0)
+            return day < DateOnly.FromDateTime(DateTime.Today) ? "dot-none" : "";
+        var avg = readings.Average(g => g.ValueMmol);
+        var min = readings.Min(g => g.ValueMmol);
+        var max = readings.Max(g => g.ValueMmol);
+        if (min < _gLow * 0.85 || max > _gHigh * 1.25) return "dot-bad";
+        if (min < _gLow || max > _gHigh) return "dot-warn";
+        return "dot-ok";
+    }
+
+    private static string GetGreeting() => DateTime.Now.Hour switch
+    {
+        >= 5  and < 12 => "Доброе утро",
+        >= 12 and < 17 => "Добрый день",
+        >= 17 and < 22 => "Добрый вечер",
+        _              => "Доброй ночи"
+    };
+
+    private string SparklinePath(List<double> vals, int w = 200, int h = 44)
+    {
+        if (vals.Count < 2) return "";
+        var min = vals.Min(); var max = vals.Max();
+        var range = max - min; if (range == 0) range = 1;
+        var pts = vals.Select((v, i) =>
+        {
+            double x = i * (w - 1.0) / (vals.Count - 1);
+            double y = h - 4 - (v - min) / range * (h - 8);
+            return $"{x:F1},{y:F1}";
+        });
+        return string.Join(" ", pts);
+    }
+
+    RenderFragment SparkCard(string label, List<double> vals, string unit, string color) =>
+        @<div class="sparkline-card">
+            <div class="sparkline-label">@label</div>
+            <div class="sparkline-val" style="color:@color">
+                @(vals.Count > 0 ? vals.Average().ToString("F0") : "—") <span style="font-size:.75rem;font-weight:400;color:var(--c-text-muted)">@unit</span>
+            </div>
+            @if (vals.Any(v => v > 0))
+            {
+                <svg viewBox="0 0 200 44" class="sparkline-svg" preserveAspectRatio="none">
+                    <defs>
+                        <linearGradient id="sg-@label.GetHashCode()" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="@color" stop-opacity=".25"/>
+                            <stop offset="100%" stop-color="@color" stop-opacity="0"/>
+                        </linearGradient>
+                    </defs>
+                    <polyline points="@SparklinePath(vals)" fill="none" stroke="@color" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            }
+        </div>;
+
+    RenderFragment MacroBar(string label, double val, double target, string unit, string cls) =>
+        @<div class="macro-bar-row">
+            <div class="macro-bar-head">
+                <span class="macro-bar-name">@label</span>
+                <span class="macro-bar-val"><b>@val.ToString("F0")</b> / @target.ToString("F0") @unit</span>
+            </div>
+            <div class="mbar">
+                <div class="mbar-fill @(val / Math.Max(1, target) > 1.05 ? "over" : cls)"
+                     style="width:@(Math.Min(100, val / Math.Max(1, target) * 100).ToString("F0", _inv))%"></div>
+            </div>
+        </div>;
+
+    private record MealGroup(string Name, string Icon, string TimeRange, double Calories);
+}

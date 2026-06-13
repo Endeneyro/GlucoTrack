@@ -1,0 +1,319 @@
+@page "/settings"
+@attribute [Authorize]
+@inject DbService Db
+@inject SyncService Sync
+
+<PageTitle>Настройки — GlucoTrack</PageTitle>
+
+<div class="page">
+    <div class="page-header"><h2>⚙️ Настройки</h2></div>
+
+    @if (_loading) { <p>Загрузка...</p> }
+    else
+    {
+        <div class="settings-section">
+            <h3>🎯 Цели питания</h3>
+            <div class="input-row" style="margin-bottom:.75rem">
+                <div class="form-group">
+                    <label>Калории (ккал/день)</label>
+                    <input class="form-control" type="number" @bind="_cal" />
+                </div>
+                <div class="form-group">
+                    <label>Белки (г/день)</label>
+                    <input class="form-control" type="number" @bind="_prot" />
+                </div>
+            </div>
+            <div class="input-row" style="margin-bottom:.75rem">
+                <div class="form-group">
+                    <label>Жиры (г/день)</label>
+                    <input class="form-control" type="number" @bind="_fat" />
+                </div>
+                <div class="form-group">
+                    <label>Углеводы (г/день)</label>
+                    <input class="form-control" type="number" @bind="_carbs" />
+                </div>
+            </div>
+            <div class="form-group" style="max-width:200px">
+                <label>Граммов на 1 ХЕ</label>
+                <input class="form-control" type="number" step="0.5" @bind="_xe" />
+            </div>
+        </div>
+
+        <div class="settings-section">
+            <h3>📈 Цели по глюкозе (ммоль/л)</h3>
+            <div class="input-row-3">
+                <div class="form-group">
+                    <label>Нижняя граница</label>
+                    <input class="form-control" type="number" step="0.1" @bind="_gLow" />
+                </div>
+                <div class="form-group">
+                    <label>Верхняя граница</label>
+                    <input class="form-control" type="number" step="0.1" @bind="_gHigh" />
+                </div>
+                <div class="form-group">
+                    <label>Целевой уровень</label>
+                    <input class="form-control" type="number" step="0.1" @bind="_gTarget" />
+                </div>
+            </div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.5rem">
+            <button class="btn btn-primary" @onclick="SaveSettingsAsync" disabled="@_saving">
+                @(_saving ? "Сохранение..." : "Сохранить настройки")
+            </button>
+            @if (_msg is not null)
+            {
+                <span class="alert alert-success" style="padding:.4rem .875rem">@_msg</span>
+            }
+        </div>
+
+        <div class="settings-section">
+            <h3>💊 Коэффициенты терапии (IC и ISF)</h3>
+            <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:1rem">
+                IC — граммов углеводов на 1 ЕД · ISF — снижение глюкозы (ммоль/л) на 1 ЕД
+            </p>
+
+            @if (_coeffs.Count > 0)
+            {
+                <table class="data-table" style="margin-bottom:1rem">
+                    <thead><tr><th>С</th><th>До</th><th>IC</th><th>ISF</th><th></th></tr></thead>
+                    <tbody>
+                        @foreach (var c in _coeffs.OrderBy(x => x.FromTime))
+                        {
+                            <tr>
+                                <td>@c.FromTime.ToString("HH:mm")</td>
+                                <td>@c.ToTime.ToString("HH:mm")</td>
+                                <td>@c.InsulinToCarbRatio г/ЕД</td>
+                                <td>@c.InsulinSensitivityFactor ммоль/ЕД</td>
+                                <td><button class="btn btn-danger btn-sm btn-icon" @onclick="() => DeleteCoeffAsync(c.Id)">✕</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            else
+            {
+                <p style="color:var(--text-muted);font-size:.875rem;margin-bottom:1rem">Интервалы не добавлены.</p>
+            }
+
+            <!-- Auto-calculate suggestion -->
+            <div class="form-card" style="margin-bottom:1rem;background:var(--c-primary-ultra,#EFF6FF);border:1.5px solid var(--c-primary-light,#BFDBFE)">
+                <h4 style="margin-bottom:.5rem">🧮 Рассчитать из данных</h4>
+                <p style="font-size:.82rem;color:var(--c-text-muted);margin-bottom:.75rem">
+                    По правилу 500/100: IC = 500 ÷ СДИ, ISF = 100 ÷ СДИ.
+                    Используются последние 14 дней, исключая дни с гипо (&lt;3.5) и тяжёлыми взлётами (&gt;15 ммоль/л).
+                </p>
+
+                @if (_calcError is not null)
+                {
+                    <div class="alert alert-error" style="margin-bottom:.75rem;font-size:.82rem">@_calcError</div>
+                }
+                @if (_calcResult is not null)
+                {
+                    <div style="background:#fff;border:1px solid var(--c-border);border-radius:var(--r-md);padding:.75rem 1rem;margin-bottom:.75rem">
+                        <div style="font-size:.82rem;color:var(--c-text-muted);margin-bottom:.4rem">
+                            Средняя СДИ за @_calcResult.DaysUsed дн. (@_calcResult.DaysExcluded исключено): <strong>@_calcResult.AvgTdd.ToString("F1") ЕД</strong>
+                        </div>
+                        <div style="display:flex;gap:2rem;font-size:1rem;font-weight:600;margin-bottom:.5rem">
+                            <span>IC = <span style="color:var(--c-primary)">@_calcResult.Ic.ToString("F1")</span> г/ЕД</span>
+                            <span>ISF = <span style="color:var(--c-primary)">@_calcResult.Isf.ToString("F2")</span> ммоль/ЕД</span>
+                        </div>
+                        <div style="font-size:.78rem;color:var(--c-text-muted);margin-bottom:.75rem">
+                            ⚠️ Расчётные значения — отправная точка. Скорректируйте совместно с эндокринологом.
+                        </div>
+                        <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+                            <span style="font-size:.82rem;color:var(--c-text-muted)">Применить как один интервал 00:00–00:00:</span>
+                            <button class="btn btn-primary btn-sm" @onclick="ApplyCalcResult">Применить</button>
+                            <button class="btn btn-ghost btn-sm" @onclick="() => _calcResult = null">Отмена</button>
+                        </div>
+                    </div>
+                }
+
+                <button class="btn btn-ghost btn-sm" @onclick="CalcFromDataAsync" disabled="@_calcLoading">
+                    @(_calcLoading ? "Считаю..." : "📊 Рассчитать")
+                </button>
+            </div>
+
+            <div class="form-card">
+                <h4>+ Добавить интервал</h4>
+                <p style="font-size:.78rem;color:var(--c-text-muted);margin-bottom:.75rem">
+                    Можно задать разные IC/ISF для разного времени суток (утро/день/ночь). Для одного коэффициента на весь день используйте 00:00–23:59.
+                </p>
+                <div class="input-row" style="margin-bottom:.75rem">
+                    <div class="form-group">
+                        <label>С</label>
+                        <input class="form-control" type="time" value="@_cFrom" @oninput="e => _cFrom = e.Value?.ToString() ?? _cFrom" />
+                    </div>
+                    <div class="form-group">
+                        <label>До</label>
+                        <input class="form-control" type="time" value="@_cTo" @oninput="e => _cTo = e.Value?.ToString() ?? _cTo" />
+                    </div>
+                </div>
+                <div class="input-row" style="margin-bottom:.75rem">
+                    <div class="form-group">
+                        <label>IC (г углеводов / 1 ЕД)</label>
+                        <input class="form-control" type="number" step="0.5" min="1" @bind="_cIc" />
+                    </div>
+                    <div class="form-group">
+                        <label>ISF (ммоль/л / 1 ЕД)</label>
+                        <input class="form-control" type="number" step="0.1" min="0.1" @bind="_cIsf" />
+                    </div>
+                </div>
+                @if (_coeffErr is not null)
+                {
+                    <div class="alert alert-error" style="margin-bottom:.75rem">@_coeffErr</div>
+                }
+                <button class="btn btn-primary btn-sm" @onclick="AddCoeffAsync">Добавить</button>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private bool _loading = true;
+    private bool _saving;
+    private string? _msg;
+    private string? _coeffErr;
+
+    // Settings fields
+    private double _cal = 2000, _prot = 80, _fat = 67, _carbs = 250, _xe = 12;
+    private double _gLow = 3.9, _gHigh = 10.0, _gTarget = 6.0;
+    private Guid _settingsId = Guid.NewGuid();
+
+    // Coefficients
+    private List<GlucoTrack.Shared.DTOs.Sync.TherapyCoeffDto> _coeffs = [];
+    private string _cFrom = "00:00", _cTo = "23:59";
+    private double _cIc = 10, _cIsf = 2.0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var settings = await Db.GetAllAsync<GlucoTrack.Shared.DTOs.Sync.UserSettingsDto>("settings");
+        if (settings.FirstOrDefault() is { } s)
+        {
+            _settingsId = s.Id;
+            _cal = s.DailyCalories; _prot = s.DailyProtein;
+            _fat = s.DailyFat; _carbs = s.DailyCarbs; _xe = s.XeGrams;
+            _gLow = s.TargetGlucoseLow; _gHigh = s.TargetGlucoseHigh; _gTarget = s.TargetGlucose;
+        }
+        _coeffs = (await Db.GetAllAsync<GlucoTrack.Shared.DTOs.Sync.TherapyCoeffDto>("therapy"))
+            .Where(c => !c.IsDeleted).ToList();
+        _loading = false;
+    }
+
+    private async Task SaveSettingsAsync()
+    {
+        _saving = true; _msg = null;
+        var dto = new GlucoTrack.Shared.DTOs.Sync.UserSettingsDto(
+            _settingsId, _gLow, _gHigh, _gTarget, _xe,
+            _cal, _prot, _fat, _carbs,
+            DisclaimerAccepted: true, DateTime.UtcNow, IsDeleted: false);
+        await Db.PutAsync("settings", dto, pending: true);
+        _ = Sync.SyncAsync();
+        _saving = false;
+        _msg = "✓ Сохранено";
+        await Task.Delay(2500);
+        _msg = null;
+    }
+
+    private async Task AddCoeffAsync()
+    {
+        _coeffErr = null;
+        if (!TimeOnly.TryParse(_cFrom, out var from) || !TimeOnly.TryParse(_cTo, out var to))
+        { _coeffErr = "Неверный формат времени"; return; }
+        if (_cIc <= 0 || _cIsf <= 0)
+        { _coeffErr = "IC и ISF должны быть больше 0"; return; }
+
+        var dto = new GlucoTrack.Shared.DTOs.Sync.TherapyCoeffDto(
+            Guid.NewGuid(), from, to, _cIc, _cIsf, DateTime.UtcNow, IsDeleted: false);
+        await Db.PutAsync("therapy", dto, pending: true);
+        _coeffs.Add(dto);
+        _ = Sync.SyncAsync();
+    }
+
+    private async Task DeleteCoeffAsync(Guid id)
+    {
+        var existing = _coeffs.FirstOrDefault(c => c.Id == id);
+        if (existing is null) return;
+        var deleted = existing with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow };
+        await Db.PutAsync("therapy", deleted, pending: true);
+        _coeffs.RemoveAll(c => c.Id == id);
+        _ = Sync.SyncAsync();
+    }
+
+    // ── Auto-calculate IC/ISF from data ──────────────────────────────────────
+
+    private record CalcResult(double AvgTdd, double Ic, double Isf, int DaysUsed, int DaysExcluded);
+
+    private CalcResult? _calcResult;
+    private bool _calcLoading;
+    private string? _calcError;
+
+    private async Task CalcFromDataAsync()
+    {
+        _calcLoading = true; _calcError = null; _calcResult = null;
+        StateHasChanged();
+        try
+        {
+            var since = DateTime.UtcNow.AddDays(-14).Date;
+            var insulin = (await Db.GetAllAsync<GlucoTrack.Shared.DTOs.Sync.InsulinInjectionDto>("insulin"))
+                .Where(i => !i.IsDeleted && i.InjectedAtUtc >= since).ToList();
+            var glucose = (await Db.GetAllAsync<GlucoTrack.Shared.DTOs.Sync.GlucoseReadingDto>("glucose"))
+                .Where(g => !g.IsDeleted && g.MeasuredAtUtc >= since).ToList();
+
+            if (insulin.Count == 0)
+            {
+                _calcError = "Недостаточно данных — нет записей об инсулине за последние 14 дней.";
+                return;
+            }
+
+            // Build per-day glucose extremes
+            var glucoseByDay = glucose
+                .GroupBy(g => g.MeasuredAtUtc.ToLocalTime().Date)
+                .ToDictionary(g => g.Key, g => (Min: g.Min(x => x.ValueMmol), Max: g.Max(x => x.ValueMmol)));
+
+            // Build per-day insulin totals, exclude bad days
+            var insulinByDay = insulin
+                .GroupBy(i => i.InjectedAtUtc.ToLocalTime().Date)
+                .ToDictionary(g => g.Key, g => g.Sum(x => x.Units));
+
+            var goodDays = new List<double>();
+            int excluded = 0;
+            foreach (var (day, tdd) in insulinByDay)
+            {
+                if (glucoseByDay.TryGetValue(day, out var ex) && (ex.Min < 3.5 || ex.Max > 15))
+                { excluded++; continue; }
+                goodDays.Add(tdd);
+            }
+
+            if (goodDays.Count < 3)
+            {
+                _calcError = $"Недостаточно «обычных» дней для расчёта (нужно минимум 3, доступно {goodDays.Count}).";
+                return;
+            }
+
+            double avgTdd = goodDays.Average();
+            _calcResult = new CalcResult(
+                AvgTdd: Math.Round(avgTdd, 1),
+                Ic: Math.Round(500.0 / avgTdd, 1),
+                Isf: Math.Round(100.0 / avgTdd, 2),
+                DaysUsed: goodDays.Count,
+                DaysExcluded: excluded);
+        }
+        finally { _calcLoading = false; }
+    }
+
+    private async Task ApplyCalcResult()
+    {
+        if (_calcResult is null) return;
+        var dto = new GlucoTrack.Shared.DTOs.Sync.TherapyCoeffDto(
+            Guid.NewGuid(),
+            TimeOnly.MinValue,              // 00:00
+            new TimeOnly(23, 59),           // 23:59
+            _calcResult.Ic, _calcResult.Isf,
+            DateTime.UtcNow, IsDeleted: false);
+        await Db.PutAsync("therapy", dto, pending: true);
+        _coeffs.Add(dto);
+        _ = Sync.SyncAsync();
+        _calcResult = null;
+    }
+}
