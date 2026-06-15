@@ -1,5 +1,6 @@
 @using GlucoTrack.Client.Models
 @using GlucoTrack.Shared.DTOs.Sync
+@using GlucoTrack.Shared.Events
 @inject DbService Db
 @inject SyncService Sync
 
@@ -113,20 +114,43 @@
             {
                 var mins = CalcPreBolusMinutes();
                 var giLabel = CalcGiLabel();
-                var insulinTime = new TimeOnly(_hour, _min).AddMinutes(-mins);
-                <div style="background:#F0FDF4;border:1.5px solid #86EFAC;border-radius:var(--r-md);padding:.65rem .875rem;margin-bottom:.75rem;font-size:.85rem">
-                    <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.35rem">
-                        <input type="checkbox" id="addInsulinReminder" @bind="_addInsulinReminder" style="width:16px;height:16px" />
-                        <label for="addInsulinReminder" style="margin:0;font-weight:600;cursor:pointer">
-                            💉 Добавить напоминание об инсулине
-                        </label>
+                var mealDt = Date.ToDateTime(new TimeOnly(_hour, _min));
+                var insulinDt = mealDt.AddMinutes(-mins);
+                var insulinTime = TimeOnly.FromDateTime(insulinDt);
+                var insulinInPast = insulinDt < DateTime.Now;
+
+                @if (insulinInPast)
+                {
+                    <div style="background:#FFFBEB;border:1.5px solid #FCD34D;border-radius:var(--r-md);padding:.65rem .875rem;margin-bottom:.75rem;font-size:.85rem">
+                        <div style="color:#92400E;font-weight:600;margin-bottom:.25rem">
+                            ⚠️ Пауза перед едой не выдержана
+                        </div>
+                        <div style="color:#92400E">
+                            Рекомендовалось вколоть инсулин в <strong>@insulinTime.ToString("HH:mm")</strong>@(string.IsNullOrEmpty(giLabel) ? "" : $" ({giLabel})").
+                            Возможен резкий подъём сахара после еды — измерьте уровень глюкозы через <strong>1.5–2 часа</strong>.
+                        </div>
                     </div>
-                    <div style="color:#166534;padding-left:1.5rem">
-                        За <strong>@mins мин</strong> до еды — в <strong>@insulinTime.ToString("HH:mm")</strong>
-                        @if (!string.IsNullOrEmpty(giLabel))
-                        { <span style="margin-left:.35rem;font-size:.78rem;color:#4b5563">(@giLabel)</span> }
+                }
+                else
+                {
+                    <div style="background:#F0FDF4;border:1.5px solid #86EFAC;border-radius:var(--r-md);padding:.65rem .875rem;margin-bottom:.75rem;font-size:.85rem">
+                        <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.35rem">
+                            <input type="checkbox" id="addInsulinReminder" @bind="_addInsulinReminder" style="width:16px;height:16px" />
+                            <label for="addInsulinReminder" style="margin:0;font-weight:600;cursor:pointer">
+                                💉 Добавить напоминание об инсулине
+                            </label>
+                        </div>
+                        <div style="color:#166534;padding-left:1.5rem">
+                            За <strong>@mins мин</strong> до еды — в <strong>@insulinTime.ToString("HH:mm")</strong>
+                            @if (!string.IsNullOrEmpty(giLabel))
+                            { <span style="margin-left:.35rem;font-size:.78rem;color:#4b5563">(@giLabel)</span> }
+                            @if (CurrentGlucose > 0)
+                            {
+                                <span style="margin-left:.35rem;font-size:.78rem;color:#4b5563">· сахар @CurrentGlucose.ToString("F1") ммоль/л</span>
+                            }
+                        </div>
                     </div>
-                </div>
+                }
             }
 
             @if (_error is not null) { <div class="alert alert-error">@_error</div> }
@@ -152,6 +176,8 @@
     [Parameter] public EventCallback OnClose { get; set; }
     [Parameter] public EventCallback OnSaved { get; set; }
     [Parameter] public PlannedEventDto? EditEvent { get; set; }
+    /// <summary>Последнее измерение глюкозы (ммоль/л). 0 = не известно.</summary>
+    [Parameter] public double CurrentGlucose { get; set; } = 0;
 
     private bool IsEditMode => EditEvent is not null;
 
@@ -211,7 +237,7 @@
     private void AddMealItem(ProductDto p)
     {
         var defaultQty = p.MeasureType == 1 ? 1 : 100;
-        _mealItems.Add(new PlannedMealItem(p.Id, p.Name, defaultQty));
+        _mealItems.Add(new PlannedMealItem(p.Id, p.Name, defaultQty, p.MeasureType, p.PieceWeightG));
         _productSearch = ""; _searchResults = [];
     }
 
@@ -259,10 +285,15 @@
         {
             var mins = CalcPreBolusMinutes();
             var insulinTime = planned.AddMinutes(-mins);
-            var insulinDto = new PlannedEventDto(
-                Guid.NewGuid(), insulinTime, (int)PlannedEventType.Insulin,
-                $"Болюс перед едой", null, null, false, DateTime.UtcNow, false);
-            await Db.PutAsync("planned_events", insulinDto, pending: false);
+            // Don't create a reminder whose time has already passed (user kept an
+            // imminent meal time instead of rescheduling) — it would be useless.
+            if (insulinTime > DateTime.UtcNow)
+            {
+                var insulinDto = new PlannedEventDto(
+                    Guid.NewGuid(), insulinTime, (int)PlannedEventType.Insulin,
+                    $"Болюс перед едой", null, null, false, DateTime.UtcNow, false);
+                await Db.PutAsync("planned_events", insulinDto, pending: false);
+            }
         }
 
         _ = Sync.SyncAsync();
@@ -279,6 +310,14 @@
         await Db.PutAsync("planned_events",
             EditEvent with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow },
             pending: false);
+
+        // Cascade: remove any meal entries created from completing this event so the
+        // meal diary doesn't keep a duplicate after the planned event is deleted.
+        var allMeals = (await Db.GetAllAsync<MealEntryDto>("meals")).ToList();
+        var linkedIds = EventReconciler.LinkedMealIds(EditEvent.Id, allMeals).ToHashSet();
+        foreach (var m in allMeals.Where(m => linkedIds.Contains(m.Id)))
+            await Db.PutAsync("meals", m with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow }, pending: true);
+
         _ = Sync.SyncAsync();
         _saving = false;
         Reset();
@@ -286,41 +325,19 @@
         await OnClose.InvokeAsync();
     }
 
-    private int CalcPreBolusMinutes()
-    {
-        double giNum = 0, giDen = 0;
-        foreach (var item in _mealItems)
-        {
-            var prod = _allProducts.FirstOrDefault(p => p.Id == item.ProductId);
-            if (prod?.GlycemicIndex is not null)
-            {
-                var carbs = prod.CarbsPer100g * item.Grams / 100.0;
-                giNum += prod.GlycemicIndex.Value * carbs;
-                giDen += carbs;
-            }
-        }
-        if (giDen <= 0) return 15;
-        var gi = giNum / giDen;
-        return gi >= 70 ? 20 : gi >= 56 ? 12 : 5;
-    }
+    // Средневзвешенный по углеводам ГИ продуктов приёма (null, если ГИ нигде не задан) —
+    // расчёт вынесен в тестируемый PreBolusPlanner.
+    private double? WeightedGi() => PreBolusPlanner.WeightedGi(
+        _mealItems
+            .Select(item => (item, prod: _allProducts.FirstOrDefault(p => p.Id == item.ProductId)))
+            .Where(x => x.prod?.GlycemicIndex is not null)
+            .Select(x => (
+                (double)x.prod!.GlycemicIndex!.Value,
+                x.prod.CarbsPer100g * NutritionMath.EffectiveGrams(x.item.MeasureType, x.item.Grams, x.item.PieceWeightG) / 100.0)));
 
-    private string CalcGiLabel()
-    {
-        double giNum = 0, giDen = 0;
-        foreach (var item in _mealItems)
-        {
-            var prod = _allProducts.FirstOrDefault(p => p.Id == item.ProductId);
-            if (prod?.GlycemicIndex is not null)
-            {
-                var carbs = prod.CarbsPer100g * item.Grams / 100.0;
-                giNum += prod.GlycemicIndex.Value * carbs;
-                giDen += carbs;
-            }
-        }
-        if (giDen <= 0) return "";
-        var gi = giNum / giDen;
-        return gi >= 70 ? $"ГИ {gi:F0} — высокий" : gi >= 56 ? $"ГИ {gi:F0} — средний" : $"ГИ {gi:F0} — низкий";
-    }
+    private int CalcPreBolusMinutes() => PreBolusPlanner.MinutesForGiAndGlucose(WeightedGi(), CurrentGlucose);
+
+    private string CalcGiLabel() => PreBolusPlanner.GiLabel(WeightedGi());
 
     private void Reset()
     {

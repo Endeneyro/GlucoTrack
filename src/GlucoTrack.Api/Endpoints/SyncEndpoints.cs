@@ -30,20 +30,22 @@ public static class SyncEndpoints
         var glucose = await db.GlucoseReadings.IgnoreQueryFilters()
             .Where(e => e.UserId == userId && e.UpdatedAtUtc > sinceTime)
             .Select(e => new GlucoseReadingDto(e.Id, e.MeasuredAtUtc, e.ValueMmol,
-                e.UpdatedAtUtc, e.IsDeleted))
+                e.UpdatedAtUtc, e.IsDeleted, e.LinkedEventId))
             .ToListAsync();
 
         var insulin = await db.InsulinInjections.IgnoreQueryFilters()
             .Where(e => e.UserId == userId && e.UpdatedAtUtc > sinceTime)
             .Select(e => new InsulinInjectionDto(e.Id, e.InjectedAtUtc, e.Units,
-                (int)e.InsulinType, e.Carbs, e.GlucoseBefore, e.UpdatedAtUtc, e.IsDeleted))
+                (int)e.InsulinType, e.Carbs, e.GlucoseBefore, e.UpdatedAtUtc, e.IsDeleted, e.LinkedEventId))
             .ToListAsync();
 
-        // Pull own + base products changed since timestamp
+        // Pull ALL own + base products (non-incremental). Products are a small reference
+        // set that rarely changes; pulling everything avoids losing edits whose client-side
+        // UpdatedAtUtc ends up older than a client's server-time sync cursor (clock skew).
         var products = await db.Products.IgnoreQueryFilters()
             .Include(p => p.Ingredients)
                 .ThenInclude(i => i.IngredientProduct)
-            .Where(e => (e.UserId == userId || e.UserId == null) && e.UpdatedAtUtc > sinceTime)
+            .Where(e => e.UserId == userId || e.UserId == null)
             .ToListAsync();
 
         var productDtos = products.Select(MapProductToDto).ToList();
@@ -59,11 +61,24 @@ public static class SyncEndpoints
             .OrderByDescending(e => e.UpdatedAtUtc)
             .Select(e => new UserSettingsDto(e.Id, e.TargetGlucoseLow, e.TargetGlucoseHigh,
                 e.TargetGlucose, e.XeGrams, e.DailyCalories, e.DailyProtein, e.DailyFat,
-                e.DailyCarbs, e.DisclaimerAccepted, e.UpdatedAtUtc, e.IsDeleted))
+                e.DailyCarbs, e.DisclaimerAccepted, e.UpdatedAtUtc, e.IsDeleted, e.DiaHours))
             .FirstOrDefaultAsync();
 
+        var profile = await db.UserProfiles.IgnoreQueryFilters()
+            .Where(e => e.UserId == userId && e.UpdatedAtUtc > sinceTime)
+            .OrderByDescending(e => e.UpdatedAtUtc)
+            .Select(e => new UserProfileDto(e.Id, e.HeightCm, e.WeightKg, e.DateOfBirth,
+                e.Gender, e.DiabetesType, e.DiagnosisYear, e.UpdatedAtUtc, e.IsDeleted))
+            .FirstOrDefaultAsync();
+
+        var insulins = await db.UserInsulins.IgnoreQueryFilters()
+            .Where(e => e.UserId == userId && e.UpdatedAtUtc > sinceTime)
+            .Select(e => new UserInsulinDto(e.Id, e.Name, e.InsulinType, e.TypicalDose,
+                e.IsActive, e.Note, e.UpdatedAtUtc, e.IsDeleted))
+            .ToListAsync();
+
         return Results.Ok(new SyncPullResponse(
-            DateTime.UtcNow, meals, glucose, insulin, productDtos, coefficients, settings));
+            DateTime.UtcNow, meals, glucose, insulin, productDtos, coefficients, settings, profile, insulins));
     }
 
     private static async Task<IResult> PushAsync(
@@ -81,6 +96,10 @@ public static class SyncEndpoints
 
         if (request.UserSettings is { } s)
             applied += await ApplyUserSettings(s, userId, db, conflicts);
+        if (request.UserProfile is { } p)
+            applied += await ApplyUserProfile(p, userId, db, conflicts);
+        if (request.UserInsulins is { Count: > 0 } ins)
+            applied += await ApplyUserInsulins(ins, userId, db, conflicts);
 
         await db.SaveChangesAsync();
         return Results.Ok(new SyncPushResponse(conflicts, applied));
@@ -139,7 +158,8 @@ public static class SyncEndpoints
                 db.GlucoseReadings.Add(new GlucoseReading
                 {
                     Id = dto.Id, UserId = userId, MeasuredAtUtc = dto.MeasuredAtUtc,
-                    ValueMmol = dto.ValueMmol, UpdatedAtUtc = dto.UpdatedAtUtc, IsDeleted = dto.IsDeleted
+                    ValueMmol = dto.ValueMmol, UpdatedAtUtc = dto.UpdatedAtUtc, IsDeleted = dto.IsDeleted,
+                    LinkedEventId = dto.LinkedEventId
                 });
                 count++;
             }
@@ -147,6 +167,7 @@ public static class SyncEndpoints
             {
                 row.MeasuredAtUtc = dto.MeasuredAtUtc; row.ValueMmol = dto.ValueMmol;
                 row.UpdatedAtUtc = dto.UpdatedAtUtc; row.IsDeleted = dto.IsDeleted;
+                row.LinkedEventId = dto.LinkedEventId;
                 count++;
             }
             else conflicts.Add(dto.Id);
@@ -172,7 +193,8 @@ public static class SyncEndpoints
                     Id = dto.Id, UserId = userId, InjectedAtUtc = dto.InjectedAtUtc,
                     Units = dto.Units, InsulinType = (InsulinType)dto.InsulinType,
                     Carbs = dto.Carbs, GlucoseBefore = dto.GlucoseBefore,
-                    UpdatedAtUtc = dto.UpdatedAtUtc, IsDeleted = dto.IsDeleted
+                    UpdatedAtUtc = dto.UpdatedAtUtc, IsDeleted = dto.IsDeleted,
+                    LinkedEventId = dto.LinkedEventId
                 });
                 count++;
             }
@@ -181,7 +203,7 @@ public static class SyncEndpoints
                 row.InjectedAtUtc = dto.InjectedAtUtc; row.Units = dto.Units;
                 row.InsulinType = (InsulinType)dto.InsulinType; row.Carbs = dto.Carbs;
                 row.GlucoseBefore = dto.GlucoseBefore; row.UpdatedAtUtc = dto.UpdatedAtUtc;
-                row.IsDeleted = dto.IsDeleted;
+                row.IsDeleted = dto.IsDeleted; row.LinkedEventId = dto.LinkedEventId;
                 count++;
             }
             else conflicts.Add(dto.Id);
@@ -288,6 +310,7 @@ public static class SyncEndpoints
                 DailyCalories = dto.DailyCalories, DailyProtein = dto.DailyProtein,
                 DailyFat = dto.DailyFat, DailyCarbs = dto.DailyCarbs,
                 DisclaimerAccepted = dto.DisclaimerAccepted,
+                DiaHours = dto.DiaHours > 0 ? dto.DiaHours : 4.0,
                 UpdatedAtUtc = dto.UpdatedAtUtc, IsDeleted = dto.IsDeleted
             });
             return 1;
@@ -300,12 +323,77 @@ public static class SyncEndpoints
             row.DailyCalories = dto.DailyCalories; row.DailyProtein = dto.DailyProtein;
             row.DailyFat = dto.DailyFat; row.DailyCarbs = dto.DailyCarbs;
             row.DisclaimerAccepted = dto.DisclaimerAccepted;
+            row.DiaHours = dto.DiaHours > 0 ? dto.DiaHours : 4.0;
             row.UpdatedAtUtc = dto.UpdatedAtUtc; row.IsDeleted = dto.IsDeleted;
             return 1;
         }
 
         conflicts.Add(dto.Id);
         return 0;
+    }
+
+    private static async Task<int> ApplyUserProfile(
+        UserProfileDto dto, Guid userId, AppDbContext db, List<Guid> conflicts)
+    {
+        var row = await db.UserProfiles.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(e => e.UserId == userId);
+        if (row == null)
+        {
+            db.UserProfiles.Add(new UserProfile
+            {
+                Id = dto.Id, UserId = userId,
+                HeightCm = dto.HeightCm, WeightKg = dto.WeightKg,
+                DateOfBirth = dto.DateOfBirth, Gender = dto.Gender,
+                DiabetesType = dto.DiabetesType, DiagnosisYear = dto.DiagnosisYear,
+                UpdatedAtUtc = dto.UpdatedAtUtc, IsDeleted = dto.IsDeleted
+            });
+            return 1;
+        }
+        if (dto.UpdatedAtUtc >= row.UpdatedAtUtc)
+        {
+            row.HeightCm = dto.HeightCm; row.WeightKg = dto.WeightKg;
+            row.DateOfBirth = dto.DateOfBirth; row.Gender = dto.Gender;
+            row.DiabetesType = dto.DiabetesType; row.DiagnosisYear = dto.DiagnosisYear;
+            row.UpdatedAtUtc = dto.UpdatedAtUtc; row.IsDeleted = dto.IsDeleted;
+            return 1;
+        }
+        conflicts.Add(dto.Id);
+        return 0;
+    }
+
+    private static async Task<int> ApplyUserInsulins(
+        List<UserInsulinDto> dtos, Guid userId, AppDbContext db, List<Guid> conflicts)
+    {
+        int count = 0;
+        var ids = dtos.Select(d => d.Id).ToList();
+        var existing = await db.UserInsulins.IgnoreQueryFilters()
+            .Where(e => ids.Contains(e.Id) && e.UserId == userId)
+            .ToDictionaryAsync(e => e.Id);
+
+        foreach (var dto in dtos)
+        {
+            if (!existing.TryGetValue(dto.Id, out var row))
+            {
+                db.UserInsulins.Add(new UserInsulin
+                {
+                    Id = dto.Id, UserId = userId, Name = dto.Name,
+                    InsulinType = dto.InsulinType, TypicalDose = dto.TypicalDose,
+                    IsActive = dto.IsActive, Note = dto.Note,
+                    UpdatedAtUtc = dto.UpdatedAtUtc, IsDeleted = dto.IsDeleted
+                });
+                count++;
+            }
+            else if (dto.UpdatedAtUtc >= row.UpdatedAtUtc)
+            {
+                row.Name = dto.Name; row.InsulinType = dto.InsulinType;
+                row.TypicalDose = dto.TypicalDose; row.IsActive = dto.IsActive;
+                row.Note = dto.Note; row.UpdatedAtUtc = dto.UpdatedAtUtc;
+                row.IsDeleted = dto.IsDeleted;
+                count++;
+            }
+            else conflicts.Add(dto.Id);
+        }
+        return count;
     }
 
     // ── Mapping helpers ───────────────────────────────────────────────────────

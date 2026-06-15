@@ -21,6 +21,7 @@ builder.Services.AddScoped<SyncService>();
 builder.Services.AddScoped<ToastService>();
 builder.Services.AddScoped<ConfirmService>();
 builder.Services.AddScoped<UndoService>();
+builder.Services.AddScoped<ModuleService>();
 
 builder.Services.AddScoped(sp =>
 {

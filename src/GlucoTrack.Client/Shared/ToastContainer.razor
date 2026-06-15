@@ -1,4 +1,5 @@
 @using GlucoTrack.Client.Models
+@using GlucoTrack.Shared.DTOs.Sync
 @using GlucoTrack.Client.Services
 @inject ToastService Toasts
 @inject DbService Db
@@ -31,7 +32,7 @@
                 @if (type == PlannedEventType.Meal && ev.MealItems?.Count > 0)
                 {
                     <div style="font-size:.8rem;color:var(--c-text-muted);margin-bottom:.5rem">
-                        @string.Join(", ", ev.MealItems.Select(m => $"{m.ProductName} {m.Grams:F0}г"))
+                        @string.Join(", ", ev.MealItems.Select(m => m.MeasureType == 1 ? $"{m.ProductName} {m.Grams:F0} шт" : $"{m.ProductName} {m.Grams:F0} г"))
                     </div>
                 }
 

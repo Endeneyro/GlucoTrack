@@ -141,6 +141,65 @@ public class BolusCalculatorTests
     }
 
     [Fact]
+    public void InsulinOnBoard_ReducesCorrectionOnly()
+    {
+        // Глюкоза 14 при цели 6 → сырая коррекция (14-6)/2 = 4 ЕД.
+        // IOB 2.5 ЕД уже на борту → итог 4 − 2.5 = 1.5. Доза на еду = 0 (углеводов нет).
+        var result = BolusCalculator.Calculate(
+            carbsGrams: 0,
+            currentGlucose: 14.0,
+            targetGlucose: 6.0,
+            insulinToCarbRatio: 10,
+            insulinSensitivityFactor: 2.0,
+            insulinOnBoard: 2.5);
+
+        Assert.Equal(0.0, result.MealDose);
+        Assert.Equal(4.0, result.CorrectionDose); // сырая коррекция до IOB
+        Assert.Equal(2.5, result.InsulinOnBoard);
+        Assert.Equal(1.5, result.TotalDose);
+    }
+
+    [Fact]
+    public void InsulinOnBoard_MealDoseStaysFull_OnlyTotalDrops()
+    {
+        // Углеводы 60/IC10 = 6 ЕД на еду; глюкоза в цели → коррекция 0.
+        // IOB 2 ЕД → итог 6 + 0 − 2 = 4. MealDose остаётся 6 (не урезается «вручную»).
+        var result = BolusCalculator.Calculate(
+            carbsGrams: 60,
+            currentGlucose: 6.0,
+            targetGlucose: 6.0,
+            insulinToCarbRatio: 10,
+            insulinSensitivityFactor: 2.0,
+            insulinOnBoard: 2.0);
+
+        Assert.Equal(6.0, result.MealDose);
+        Assert.Equal(0.0, result.CorrectionDose);
+        Assert.Equal(4.0, result.TotalDose);
+    }
+
+    [Fact]
+    public void InsulinOnBoard_ExceedsNeed_TotalNeverNegative()
+    {
+        // Небольшая потребность, но крупный IOB → доза не может быть отрицательной
+        var result = BolusCalculator.Calculate(
+            carbsGrams: 10,            // 1 ЕД на еду
+            currentGlucose: 8.0,       // коррекция (8-6)/2 = 1 ЕД
+            targetGlucose: 6.0,
+            insulinToCarbRatio: 10,
+            insulinSensitivityFactor: 2.0,
+            insulinOnBoard: 5.0);      // активного инсулина больше, чем нужно
+
+        Assert.Equal(0.0, result.TotalDose);
+    }
+
+    [Fact]
+    public void NegativeInsulinOnBoard_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            BolusCalculator.Calculate(60, 6.0, 6.0, 10, 2.0, insulinOnBoard: -1));
+    }
+
+    [Fact]
     public void FractionalCarbs_RoundsToTwoDecimals()
     {
         // 55г / IC9 = 6.111... → 6.11

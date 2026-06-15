@@ -1,3 +1,6 @@
+@inject ModuleService Modules
+@inject AuthenticationStateProvider AuthState
+
 <CascadingAuthenticationState>
     <Router AppAssembly="@typeof(App).Assembly">
         <Found Context="routeData">
@@ -16,3 +19,21 @@
         </NotFound>
     </Router>
 </CascadingAuthenticationState>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        if (auth.User.Identity?.IsAuthenticated == true)
+            await Modules.InitAsync();
+
+        AuthState.AuthenticationStateChanged += OnAuthChanged;
+    }
+
+    private async void OnAuthChanged(Task<AuthenticationState> task)
+    {
+        var auth = await task;
+        if (auth.User.Identity?.IsAuthenticated == true)
+            await Modules.InitAsync();
+    }
+}

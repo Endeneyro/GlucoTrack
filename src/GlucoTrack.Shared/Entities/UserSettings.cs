@@ -11,4 +11,5 @@ public class UserSettings : EntityBase
     public double DailyFat { get; set; }
     public double DailyCarbs { get; set; }
     public bool DisclaimerAccepted { get; set; }
+    public double DiaHours { get; set; } = 4.0;
 }

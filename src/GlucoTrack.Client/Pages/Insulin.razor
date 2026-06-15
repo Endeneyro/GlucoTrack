@@ -4,11 +4,13 @@
 @using GlucoTrack.Shared.Calculations
 @using GlucoTrack.Shared.DTOs.Sync
 @using GlucoTrack.Shared.Entities
+@using GlucoTrack.Shared.Events
 @inject DbService Db
 @inject SyncService Sync
 @inject NavigationManager Nav
 @inject ConfirmService Confirm
 @inject UndoService Undo
+@implements IDisposable
 
 <PageTitle>Инсулин — GlucoTrack</PageTitle>
 
@@ -92,6 +94,14 @@
                 </div>
             </div>
 
+            @{ var iob = CurrentIob(); }
+            @if (iob > 0)
+            {
+                <div style="background:#EFF6FF;border:1.5px solid #BFDBFE;border-radius:var(--r-md);padding:.55rem .875rem;font-size:.8rem;color:#1e40af;margin-bottom:.75rem">
+                    💉 Активный инсулин: <strong>@iob.ToString("F1") ЕД</strong> от недавних уколов. Учтите его в дозе, чтобы инсулин не «сложился».
+                </div>
+            }
+
             <div style="margin-bottom:.75rem;display:flex;align-items:center;gap:.5rem;font-size:.875rem">
                 <input type="checkbox" id="reminder-cb" @bind="_scheduleReminder" style="width:1rem;height:1rem" />
                 <label for="reminder-cb" style="cursor:pointer;color:var(--c-text-muted)">
@@ -164,8 +174,26 @@
     private InsulinType _type = InsulinType.Bolus;
     private double _units = 1, _carbs, _glucoseBefore;
     private double _totalBolus, _totalBasal;
+    private double _diaHours = 4.0;
 
     protected override async Task OnInitializedAsync()
+    {
+        Nav.LocationChanged += OnLocationChanged;
+        await LoadItemsAsync();
+    }
+
+    private async void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        if (e.Location.Contains("/insulin"))
+        {
+            await ReloadListAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+
+    private async Task LoadItemsAsync()
     {
         _items = (await Db.GetAllAsync<InsulinInjectionDto>("insulin")).Where(i => !i.IsDeleted).ToList();
         CalcTotals();
@@ -185,15 +213,16 @@
                 var coeffs = (await Db.GetAllAsync<TherapyCoeffDto>("therapy"))
                     .Where(c => !c.IsDeleted).OrderBy(c => c.FromTime).ToList();
                 var now = TimeOnly.FromDateTime(DateTime.Now);
-                var coeff = coeffs.FirstOrDefault(c => now >= c.FromTime && now < c.ToTime)
+                var coeff = coeffs.FirstOrDefault(c => c.CoversTime(now))
                             ?? coeffs.FirstOrDefault();
                 var settings = (await Db.GetAllAsync<UserSettingsDto>("settings")).FirstOrDefault();
                 double target = settings?.TargetGlucose ?? 6.0;
+                if (settings?.DiaHours > 0) _diaHours = settings.DiaHours;
 
                 if (coeff is not null && coeff.InsulinSensitivityFactor > 0)
                 {
                     var result = BolusCalculator.Calculate(0, g, target,
-                        coeff.InsulinToCarbRatio, coeff.InsulinSensitivityFactor);
+                        coeff.InsulinToCarbRatio, coeff.InsulinSensitivityFactor, CurrentIob());
                     if (result.TotalDose > 0)
                         _units = Math.Round(result.TotalDose * 2) / 2; // round to 0.5
                 }
@@ -213,6 +242,13 @@
         }
 
         _loading = false;
+    }
+
+    // Simple reload used by LocationChanged — only refreshes the list, skips prefill logic
+    private async Task ReloadListAsync()
+    {
+        _items = (await Db.GetAllAsync<InsulinInjectionDto>("insulin")).Where(i => !i.IsDeleted).ToList();
+        CalcTotals();
     }
 
     private async Task PrefillFromContextAsync()
@@ -252,7 +288,10 @@
             foreach (var mi in mealItems)
             {
                 if (products.TryGetValue(mi.ProductId, out var prod))
-                    totalCarbs += prod.CarbsPer100g * mi.Grams / 100.0;
+                {
+                    var effG = NutritionMath.EffectiveGrams(mi.MeasureType, mi.Grams, mi.PieceWeightG);
+                    totalCarbs += prod.CarbsPer100g * effG / 100.0;
+                }
             }
 
             if (totalCarbs > 0)
@@ -262,6 +301,13 @@
             }
         }
     }
+
+    private double CurrentIob() => InsulinOnBoard.Calculate(
+        _items
+            .Where(i => !i.IsDeleted && (int)InsulinType.Bolus == i.InsulinType)
+            .Select(i => (i.InjectedAtUtc, i.Units)),
+        DateTime.UtcNow,
+        _diaHours);
 
     private void CalcTotals()
     {
@@ -276,11 +322,12 @@
         _err = null;
         if (_units <= 0) { _err = "Доза должна быть больше 0"; return; }
 
+        var linkedEventId = (EventId.HasValue && _linkedEvent is not null) ? EventId : null;
         var dto = new InsulinInjectionDto(
             Guid.NewGuid(), _dt.ToUniversalTime(), _units, (int)_type,
             _carbs > 0 ? _carbs : null,
             _glucoseBefore > 0 ? _glucoseBefore : null,
-            DateTime.UtcNow, false);
+            DateTime.UtcNow, false, linkedEventId);
 
         await Db.PutAsync("insulin", dto, pending: true);
         _items.Add(dto); CalcTotals();

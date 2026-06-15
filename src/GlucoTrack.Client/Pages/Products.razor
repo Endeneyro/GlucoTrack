@@ -4,6 +4,7 @@
 @inject DbService Db
 @inject SyncService Sync
 @inject HttpClient Http
+@inject SyncService Sync
 
 <PageTitle>Продукты — GlucoTrack</PageTitle>
 
@@ -18,6 +19,7 @@
         <button class="tab-btn @(_tab == 0 ? "active" : "")" @onclick="() => SetTab(0)">Мои</button>
         <button class="tab-btn @(_tab == 1 ? "active" : "")" @onclick="() => SetTab(1)">Избранное</button>
         <button class="tab-btn @(_tab == 2 ? "active" : "")" @onclick="() => SetTab(2)">Поиск в базе</button>
+        <button class="tab-btn @(_tab == 3 ? "active" : "")" @onclick="() => SetTab(3)">Шаблоны меню</button>
     </div>
 
     <!-- Add / Edit form -->
@@ -301,6 +303,131 @@
         else { @ProductList(_favorites, mine: false) }
     }
 
+    <!-- Tab: Шаблоны меню -->
+    @if (_tab == 3)
+    {
+        <!-- Список шаблонов -->
+        @if (_templates.Count == 0 && !_tplEditing)
+        {
+            <div class="home-card" style="text-align:center;padding:2rem;color:var(--c-text-muted)">
+                <div style="font-size:2.5rem">🍱</div>
+                <div style="margin-top:.5rem;font-size:.9rem">Нет шаблонов. Создайте первый набор продуктов для быстрого добавления.</div>
+                <button class="btn btn-primary btn-sm" style="margin-top:1rem" @onclick="TplOpenAdd">+ Создать шаблон</button>
+            </div>
+        }
+        else
+        {
+            @foreach (var tpl in _templates.Where(t => !t.IsDeleted).OrderBy(t => t.Name))
+            {
+                var tplKcal = TplKcal(tpl);
+                var tplCarbs = TplNutrient(tpl, p => p.CarbsPer100g);
+                <div class="home-card" style="padding:.75rem 1rem;margin-bottom:.5rem">
+                    <div style="display:flex;align-items:center;gap:.75rem">
+                        <div style="font-size:1.5rem">🍱</div>
+                        <div style="flex:1;min-width:0">
+                            <div style="font-weight:700;font-size:.95rem">@tpl.Name</div>
+                            <div style="font-size:.78rem;color:var(--c-text-muted);margin-top:.15rem">
+                                @tpl.Items.Count поз. · @tplKcal.ToString("F0") ккал · У @tplCarbs.ToString("F1") г
+                            </div>
+                            <div style="font-size:.75rem;color:var(--c-text-muted);margin-top:.15rem">
+                                @string.Join(", ", tpl.Items.Select(i => i.ProductName))
+                            </div>
+                        </div>
+                        <div style="display:flex;gap:.25rem;flex-shrink:0">
+                            <button class="btn btn-primary btn-sm" title="Добавить в питание сегодня"
+                                    @onclick="() => TplApplyAsync(tpl)">
+                                ➕ Применить
+                            </button>
+                            <button class="btn btn-ghost btn-icon btn-sm" title="Редактировать"
+                                    @onclick="() => TplOpenEdit(tpl)">✏️</button>
+                            <button class="btn btn-ghost btn-icon btn-sm" title="Удалить"
+                                    @onclick="() => TplDeleteAsync(tpl)">🗑</button>
+                        </div>
+                    </div>
+                </div>
+            }
+            @if (!_tplEditing)
+            {
+                <button class="btn btn-ghost btn-sm" style="margin-top:.5rem" @onclick="TplOpenAdd">+ Новый шаблон</button>
+            }
+        }
+
+        <!-- Форма создания/редактирования шаблона -->
+        @if (_tplEditing)
+        {
+            <div class="home-card" style="margin-top:.75rem;border:2px solid var(--c-primary)">
+                <div class="home-card-title">@(_tplEditId == Guid.Empty ? "Новый шаблон" : "Редактировать шаблон")</div>
+
+                <div class="form-group">
+                    <label>Название *</label>
+                    <input class="form-control" type="text" placeholder="Например: Завтрак обычный" @bind="_tplName" />
+                </div>
+
+                <!-- Состав -->
+                <div style="margin-bottom:.75rem">
+                    <div style="font-size:.82rem;font-weight:600;margin-bottom:.5rem;display:flex;justify-content:space-between;align-items:center">
+                        <span>Состав (@_tplItems.Count поз.)</span>
+                        @if (_tplItems.Count > 0)
+                        {
+                            <span style="color:var(--c-text-muted);font-weight:400">
+                                @TplPreviewKcal().ToString("F0") ккал · У @TplPreviewCarbs().ToString("F1") г
+                            </span>
+                        }
+                    </div>
+
+                    @foreach (var item in _tplItems)
+                    {
+                        var idx = _tplItems.IndexOf(item);
+                        var prod = _allProducts.FirstOrDefault(p => p.Id == item.ProductId);
+                        <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.4rem;font-size:.875rem">
+                            <div style="flex:1">@item.ProductName</div>
+                            <input class="form-control" type="number" min="1" step="1" style="width:75px"
+                                   value="@item.Grams"
+                                   @onchange="e => TplUpdateGrams(idx, double.TryParse(e.Value?.ToString(), out var g) ? g : item.Grams)" />
+                            <span style="color:var(--c-text-muted);font-size:.8rem">@(item.MeasureType == 1 ? "шт" : "г")</span>
+                            <button class="btn btn-ghost btn-icon btn-sm" @onclick="() => _tplItems.RemoveAt(idx)">✕</button>
+                        </div>
+                    }
+
+                    <!-- Поиск продукта для добавления -->
+                    <div class="form-group" style="margin-bottom:0;position:relative">
+                        <input class="form-control" type="text" placeholder="Добавить продукт..."
+                               @bind="_tplSearch" @oninput="TplSearchProducts" />
+                        @if (_tplSearchResults.Count > 0)
+                        {
+                            <div class="search-results">
+                                @foreach (var p in _tplSearchResults)
+                                {
+                                    <div class="search-result-item" @onclick="() => TplAddProduct(p)">
+                                        <div>@p.Name</div>
+                                        <div class="search-result-sub">@p.CaloriesPer100g.ToString("F0") ккал · Б@p.ProteinPer100g.ToString("F1") Ж@p.FatPer100g.ToString("F1") У@p.CarbsPer100g.ToString("F1")</div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                @if (_tplError is not null)
+                { <div style="font-size:.82rem;color:var(--c-danger);margin-bottom:.5rem">@_tplError</div> }
+
+                <div style="display:flex;gap:.5rem">
+                    <button class="btn btn-primary btn-sm" @onclick="TplSaveAsync" disabled="@_tplSaving">
+                        @(_tplSaving ? "..." : "Сохранить")
+                    </button>
+                    <button class="btn btn-ghost btn-sm" @onclick="TplCancelEdit">Отмена</button>
+                </div>
+            </div>
+        }
+
+        @if (_tplApplied is not null)
+        {
+            <div style="margin-top:.75rem;background:#DCFCE7;border:1.5px solid #86EFAC;border-radius:var(--r-md);padding:.6rem .875rem;font-size:.875rem;color:#166534">
+                ✓ Шаблон «@_tplApplied» добавлен в питание сегодня
+            </div>
+        }
+    }
+
     <!-- Tab: Поиск в базе -->
     @if (_tab == 2)
     {
@@ -415,6 +542,7 @@
     {
         _tab = t;
         if (t == 1 && _favorites.Count == 0) await LoadFavoritesAsync();
+        if (t == 3 && _templates.Count == 0) await LoadTemplatesAsync();
     }
 
     private async Task LoadMyProductsAsync()
@@ -474,7 +602,7 @@
     private void OpenEdit(ProductDto p)
     {
         _imageFile = null; _imagePreview = null; _imageError = null;
-        _existingImageUrl = ProductImageUrl(p.Id);
+        _existingImageUrl = ProductImageUrl(p);
         _editId = p.Id; _name = p.Name; _category = p.Category; _measureType = p.MeasureType;
         _pieceWeightG = p.PieceWeightG ?? 0; _defaultServingG = p.DefaultServingG;
         _isComposite = p.IsComposite; _totalYieldG = p.TotalYieldG ?? 0;
@@ -560,11 +688,17 @@
             ingredients, DateTime.UtcNow, false);
 
         await Db.PutAsync("products", dto, pending: true);
-        _ = Sync.SyncAsync();
 
         // Upload image if selected
         if (_imageFile is not null)
+        {
+            await Sync.SyncAsync(); // product must exist on server before uploading image
             await UploadImageAsync(dto.Id, _imageFile);
+        }
+        else
+        {
+            _ = Sync.SyncAsync();
+        }
 
         _saving = false; _editing = false;
         _imageFile = null; _imagePreview = null;
@@ -674,6 +808,9 @@
     };
 
     private static string ProductImageUrl(Guid id) => $"/api/products/{id}/image";
+    // Cache-busting variant: URL changes whenever the product is updated, so a freshly
+    // uploaded image is refetched instead of served from the browser cache.
+    private static string ProductImageUrl(ProductDto p) => $"/api/products/{p.Id}/image?v={p.UpdatedAtUtc.Ticks}";
 
     private async Task UploadImageAsync(Guid productId, IBrowserFile file)
     {
@@ -691,7 +828,7 @@
         @<div style="display:flex;flex-direction:column;gap:.5rem">
             @foreach (var p in items)
             {
-                var imgUrl = ProductImageUrl(p.Id);
+                var imgUrl = ProductImageUrl(p);
                 <div class="home-card" style="padding:.16rem .16rem">
                     <div style="display:flex;align-items:flex-start;gap:.75rem">
                         <img src="@imgUrl" alt=""
@@ -742,6 +879,144 @@
 
     private static double? ParseNullable(object? v) =>
         double.TryParse(v?.ToString(), out var d) && d > 0 ? d : null;
+
+    // ── Meal templates ────────────────────────────────────────────────────────
+
+    private List<MealTemplateDto> _templates = [];
+    private bool _tplEditing, _tplSaving;
+    private Guid _tplEditId = Guid.Empty;
+    private string _tplName = "", _tplSearch = "", _tplError = "";
+    private string? _tplApplied;
+    private List<PlannedMealItem> _tplItems = [];
+    private List<ProductDto> _tplSearchResults = [];
+
+    private async Task LoadTemplatesAsync()
+    {
+        _templates = (await Db.GetAllAsync<MealTemplateDto>("meal_templates"))
+            .Where(t => !t.IsDeleted).ToList();
+    }
+
+    private void TplOpenAdd()
+    {
+        _tplEditId = Guid.Empty; _tplName = ""; _tplItems = [];
+        _tplSearch = ""; _tplSearchResults = []; _tplError = "";
+        _tplEditing = true;
+    }
+
+    private void TplOpenEdit(MealTemplateDto tpl)
+    {
+        _tplEditId = tpl.Id; _tplName = tpl.Name;
+        _tplItems = tpl.Items.Select(i => new PlannedMealItem(i.ProductId, i.ProductName, i.Grams, i.MeasureType, i.PieceWeightG)).ToList();
+        _tplSearch = ""; _tplSearchResults = []; _tplError = "";
+        _tplEditing = true;
+    }
+
+    private void TplCancelEdit() { _tplEditing = false; _tplError = ""; }
+
+    private void TplSearchProducts(ChangeEventArgs e)
+    {
+        _tplSearch = e.Value?.ToString() ?? "";
+        _tplSearchResults = _tplSearch.Length < 2 ? [] :
+            _allProducts.Where(p => p.Name.Contains(_tplSearch, StringComparison.OrdinalIgnoreCase))
+                        .Take(8).ToList();
+    }
+
+    private void TplAddProduct(ProductDto p)
+    {
+        _tplItems.Add(new PlannedMealItem(p.Id, p.Name, p.DefaultServingG, p.MeasureType, p.PieceWeightG));
+        _tplSearch = ""; _tplSearchResults = [];
+    }
+
+    private void TplUpdateGrams(int idx, double g)
+    {
+        if (idx < _tplItems.Count)
+            _tplItems[idx] = _tplItems[idx] with { Grams = g };
+    }
+
+    private async Task TplSaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_tplName)) { _tplError = "Введите название шаблона"; return; }
+        if (_tplItems.Count == 0) { _tplError = "Добавьте хотя бы один продукт"; return; }
+        _tplSaving = true; _tplError = "";
+
+        var dto = new MealTemplateDto(
+            _tplEditId == Guid.Empty ? Guid.NewGuid() : _tplEditId,
+            _tplName.Trim(), _tplItems, DateTime.UtcNow, false);
+
+        await Db.PutAsync("meal_templates", dto, pending: false);
+
+        var idx = _templates.FindIndex(t => t.Id == dto.Id);
+        if (idx >= 0) _templates[idx] = dto; else _templates.Add(dto);
+
+        _tplSaving = false; _tplEditing = false;
+    }
+
+    private async Task TplDeleteAsync(MealTemplateDto tpl)
+    {
+        await Db.PutAsync("meal_templates", tpl with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow }, pending: false);
+        _templates.RemoveAll(t => t.Id == tpl.Id);
+    }
+
+    private async Task TplApplyAsync(MealTemplateDto tpl)
+    {
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var now = TimeOnly.FromDateTime(DateTime.Now);
+        foreach (var item in tpl.Items)
+        {
+            var dto = new MealEntryDto(
+                Guid.NewGuid(), today, now,
+                (int)GlucoTrack.Shared.Entities.MealType.Snack,
+                item.ProductId, item.Grams,
+                DateTime.UtcNow, false);
+            await Db.PutAsync("meals", dto, pending: true);
+        }
+        _ = Sync.SyncAsync();
+        _tplApplied = tpl.Name;
+        await Task.Delay(3000);
+        _tplApplied = null;
+    }
+
+    private double TplKcal(MealTemplateDto tpl)
+    {
+        double total = 0;
+        foreach (var i in tpl.Items)
+        {
+            var p = _allProducts.FirstOrDefault(x => x.Id == i.ProductId);
+            if (p is null) continue;
+            total += p.CaloriesPer100g * NutritionMath(p, i.Grams);
+        }
+        return total;
+    }
+
+    private double TplNutrient(MealTemplateDto tpl, Func<ProductDto, double> selector)
+    {
+        double total = 0;
+        foreach (var i in tpl.Items)
+        {
+            var p = _allProducts.FirstOrDefault(x => x.Id == i.ProductId);
+            if (p is null) continue;
+            total += selector(p) * NutritionMath(p, i.Grams);
+        }
+        return total;
+    }
+
+    private static double NutritionMath(ProductDto p, double grams)
+    {
+        var effG = p.MeasureType == 1 ? grams * (p.PieceWeightG ?? 100) : grams;
+        return effG / 100.0;
+    }
+
+    private double TplPreviewKcal() => _tplItems.Sum(i =>
+    {
+        var p = _allProducts.FirstOrDefault(x => x.Id == i.ProductId);
+        return p is null ? 0 : p.CaloriesPer100g * NutritionMath(p, i.Grams);
+    });
+
+    private double TplPreviewCarbs() => _tplItems.Sum(i =>
+    {
+        var p = _allProducts.FirstOrDefault(x => x.Id == i.ProductId);
+        return p is null ? 0 : p.CarbsPer100g * NutritionMath(p, i.Grams);
+    });
 
     private record IngredientItem(Guid ProductId, string Name, double Grams);
 

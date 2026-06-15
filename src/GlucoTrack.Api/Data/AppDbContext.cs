@@ -16,6 +16,8 @@ public class AppDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, Guid>
     }
 
     public DbSet<UserSettings> UserSettings => Set<UserSettings>();
+    public DbSet<UserProfile> UserProfiles => Set<UserProfile>();
+    public DbSet<UserInsulin> UserInsulins => Set<UserInsulin>();
     public DbSet<TherapyCoefficient> TherapyCoefficients => Set<TherapyCoefficient>();
     public DbSet<Product> Products => Set<Product>();
     public DbSet<ProductIngredient> ProductIngredients => Set<ProductIngredient>();
@@ -32,6 +34,8 @@ public class AppDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, Guid>
         base.OnModelCreating(builder);
 
         builder.Entity<UserSettings>().HasQueryFilter(e => e.UserId == _currentUserId && !e.IsDeleted);
+        builder.Entity<UserProfile>().HasQueryFilter(e => e.UserId == _currentUserId && !e.IsDeleted);
+        builder.Entity<UserInsulin>().HasQueryFilter(e => e.UserId == _currentUserId && !e.IsDeleted);
         builder.Entity<TherapyCoefficient>().HasQueryFilter(e => e.UserId == _currentUserId && !e.IsDeleted);
         builder.Entity<MealEntry>().HasQueryFilter(e => e.UserId == _currentUserId && !e.IsDeleted);
         builder.Entity<GlucoseReading>().HasQueryFilter(e => e.UserId == _currentUserId && !e.IsDeleted);

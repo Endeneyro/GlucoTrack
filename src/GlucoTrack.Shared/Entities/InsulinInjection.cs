@@ -9,4 +9,5 @@ public class InsulinInjection : EntityBase
     public InsulinType InsulinType { get; set; }
     public double? Carbs { get; set; }
     public double? GlucoseBefore { get; set; }
+    public Guid? LinkedEventId { get; set; }
 }

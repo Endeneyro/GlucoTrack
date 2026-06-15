@@ -3,10 +3,15 @@
 @using GlucoTrack.Shared.DTOs.Sync
 @using GlucoTrack.Shared.Entities
 @using GlucoTrack.Shared.Calculations
+@using GlucoTrack.Shared.Events
+@using GlucoTrack.Client.Models
 @inject DbService Db
 @inject SyncService Sync
 @inject ConfirmService Confirm
 @inject UndoService Undo
+@inject NavigationManager Nav
+@inject ModuleService Modules
+@implements IDisposable
 
 <PageTitle>Питание — GlucoTrack</PageTitle>
 
@@ -17,6 +22,15 @@
             @(_showAddMeal ? "Отмена" : "+ Добавить приём")
         </button>
     </div>
+
+    <!-- Uncovered carbs banner -->
+    @if (_uncoveredCarbs > 0.5)
+    {
+        <div style="background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:var(--r-md);padding:.65rem 1rem;font-size:.85rem;color:#92400E;margin-bottom:1rem;display:flex;align-items:center;justify-content:space-between;gap:.75rem">
+            <span>⚠️ Вы съели <strong>+@_uncoveredCarbs.ToString("F0") г углеводов</strong> сверх рассчитанного болюса — они не покрыты инсулином.</span>
+            <a href="/bolus?carbs=@_uncoveredCarbs.ToString("F0", System.Globalization.CultureInfo.InvariantCulture)" style="white-space:nowrap;font-weight:600;color:#92400E;text-decoration:underline">Рассчитать доп. дозу →</a>
+        </div>
+    }
 
     <!-- Date navigation -->
     <div class="date-nav">
@@ -131,13 +145,15 @@
             }
 
             <div class="form-group" style="max-width:150px">
-                <label>Масса (г)</label>
+                <label>@(_selectedProduct?.MeasureType == 1 ? "Количество (шт)" : "Масса (г)")</label>
                 <input class="form-control" type="number" min="1" step="1" @bind="_newGrams" />
             </div>
 
             @if (_selectedProduct is not null)
             {
-                var k = _newGrams / 100.0;
+                var isByPiece = _selectedProduct.MeasureType == 1;
+                var previewG = NutritionMath.EffectiveGrams(_selectedProduct.MeasureType, _newGrams, _selectedProduct.PieceWeightG);
+                var k = previewG / 100.0;
                 <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:.75rem">
                     Калории: <b>@((_selectedProduct.CaloriesPer100g * k).ToString("F0"))</b> ккал ·
                     Б: <b>@((_selectedProduct.ProteinPer100g * k).ToString("F1"))</b> ·
@@ -162,13 +178,16 @@
                     @foreach (var entry in group.OrderBy(e => e.Time))
                     {
                         var p = _productsMap.GetValueOrDefault(entry.ProductId);
-                        var k = entry.Grams / 100.0;
+                        var byPiece = p?.MeasureType == 1;
+                        var effG = p is null ? entry.Grams : NutritionMath.EffectiveGrams(p.MeasureType, entry.Grams, p.PieceWeightG);
+                        var k = effG / 100.0;
+                        var portionLabel = byPiece ? $"{entry.Grams:F0} шт" : $"{entry.Grams:F0} г";
                         <div class="entry-item">
                             <div class="entry-time">@entry.Time.ToString("HH:mm")</div>
                             <div class="entry-main">
                                 <div class="entry-value">@(p?.Name ?? "—")</div>
                                 <div class="entry-sub">
-                                    @entry.Grams г ·
+                                    @portionLabel ·
                                     @(p is not null ? $"{p.CaloriesPer100g * k:F0} ккал · Б {p.ProteinPer100g * k:F1} · Ж {p.FatPer100g * k:F1} · У {p.CarbsPer100g * k:F1} г" : "")
                                 </div>
                             </div>
@@ -212,15 +231,37 @@
     private double _dayCal, _dayProt, _dayFat, _dayCarbs;
     private double _xeGrams = 12;
 
+    // Uncovered carbs detection
+    private double _uncoveredCarbs;
+    private List<InsulinInjectionDto> _injections = [];
+
     protected override async Task OnInitializedAsync()
+    {
+        Nav.LocationChanged += OnLocationChanged;
+        await LoadDataAsync();
+    }
+
+    private async void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        if (e.Location.Contains("/meals"))
+        {
+            await LoadDataAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task LoadDataAsync()
     {
         var settings = (await Db.GetAllAsync<GlucoTrack.Shared.DTOs.Sync.UserSettingsDto>("settings")).FirstOrDefault();
         if (settings is not null) _xeGrams = settings.XeGrams;
         _allEntries = (await Db.GetAllAsync<MealEntryDto>("meals")).Where(m => !m.IsDeleted).ToList();
         _products = (await Db.GetAllAsync<ProductDto>("products")).Where(p => !p.IsDeleted).ToList();
         _productsMap = _products.ToDictionary(p => p.Id);
+        _injections = (await Db.GetAllAsync<InsulinInjectionDto>("insulin")).Where(i => !i.IsDeleted).ToList();
         FilterDay(); _loading = false;
     }
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
 
     private void FilterDay()
     {
@@ -229,10 +270,49 @@
         foreach (var e in _dayEntries)
         {
             if (!_productsMap.TryGetValue(e.ProductId, out var p)) continue;
-            var k = e.Grams / 100.0;
+            var effG = NutritionMath.EffectiveGrams(p.MeasureType, e.Grams, p.PieceWeightG);
+            var k = effG / 100.0;
             _dayCal += p.CaloriesPer100g * k; _dayProt += p.ProteinPer100g * k;
             _dayFat += p.FatPer100g * k; _dayCarbs += p.CarbsPer100g * k;
         }
+        CheckUncoveredCarbs();
+    }
+
+    // Show banner only when viewing today and there's a recent meal bolus (last 60 min).
+    // Compare sum of Carbs field on those boluses vs actual carbs eaten in the same window.
+    private void CheckUncoveredCarbs()
+    {
+        _uncoveredCarbs = 0;
+        if (_date != DateOnly.FromDateTime(DateTime.Today)) return;
+
+        var now = DateTime.UtcNow;
+        var windowStart = now.AddMinutes(-60);
+
+        // All meal boluses injected in the last 60 minutes
+        var recentBoluses = _injections
+            .Where(i => i.InsulinType == (int)GlucoTrack.Shared.Entities.InsulinType.Bolus
+                        && i.Carbs is > 0
+                        && i.InjectedAtUtc >= windowStart)
+            .ToList();
+
+        if (recentBoluses.Count == 0) return;
+
+        double bolusedCarbs = recentBoluses.Sum(i => i.Carbs ?? 0);
+
+        // Actual carbs eaten within the same window (local time comparison)
+        var windowStartLocal = DateTime.Now.AddMinutes(-60);
+        var windowStartTime = TimeOnly.FromDateTime(windowStartLocal);
+
+        double eatenCarbs = _dayEntries.Sum(e =>
+        {
+            if (e.Time < windowStartTime) return 0.0;
+            if (!_productsMap.TryGetValue(e.ProductId, out var p)) return 0.0;
+            var effG = NutritionMath.EffectiveGrams(p.MeasureType, e.Grams, p.PieceWeightG);
+            return p.CarbsPer100g * effG / 100.0;
+        });
+
+        var delta = eatenCarbs - bolusedCarbs;
+        if (delta > 3.0) _uncoveredCarbs = delta;
     }
 
     private void PrevDay() { _date = _date.AddDays(-1); FilterDay(); }
@@ -252,6 +332,7 @@
     private void SelectProduct(ProductDto p)
     {
         _selectedProduct = p; _productSearch = p.Name; _searchResults = [];
+        _newGrams = p.MeasureType == 1 ? 1 : 100;
     }
 
     private void ClearProduct() { _selectedProduct = null; _productSearch = ""; _searchResults = []; }
@@ -283,29 +364,76 @@
         var dto = new MealEntryDto(Guid.NewGuid(), _date, time, (int)_newMealType,
             _selectedProduct.Id, _newGrams, DateTime.UtcNow, false);
         await Db.PutAsync("meals", dto, pending: true);
-        _allEntries.Add(dto); FilterDay();
+        _allEntries.Add(dto);
+        // Reload injections so the banner sees boluses entered after the page loaded
+        _injections = (await Db.GetAllAsync<InsulinInjectionDto>("insulin")).Where(i => !i.IsDeleted).ToList();
+        FilterDay();
         _showAddMeal = false; ClearProduct(); _newGrams = 100;
         _ = Sync.SyncAsync();
+
+        // Auto-schedule post-meal glucose check in 2 hours (GlucoseModule only)
+        if (Modules.GlucoseModule)
+            await SchedulePostMealGlucoseCheckAsync(dto);
     }
 
     private async Task DeleteMealAsync(Guid id)
     {
         var item = _allEntries.First(e => e.Id == id);
         var prod = _productsMap.GetValueOrDefault(item.ProductId);
-        var label = $"{prod?.Name ?? "Продукт"} {item.Grams:F0} г";
+        var byPiece = prod?.MeasureType == 1;
+        var label = byPiece ? $"{prod?.Name ?? "Продукт"} {item.Grams:F0} шт" : $"{prod?.Name ?? "Продукт"} {item.Grams:F0} г";
         if (!await Confirm.ConfirmAsync("Удалить запись?", label)) return;
 
         await Db.PutAsync("meals", item with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow }, pending: true);
         _allEntries.RemoveAll(e => e.Id == id); FilterDay();
+
+        // Cascade: if this meal came from a planned event, remove that event too so it
+        // doesn't linger as a duplicate in the calendar diary.
+        PlannedEventDto? linkedEvent = null;
+        if (item.LinkedEventId is { } evId)
+        {
+            linkedEvent = (await Db.GetAllAsync<PlannedEventDto>("planned_events"))
+                .FirstOrDefault(e => e.Id == evId && !e.IsDeleted);
+            if (linkedEvent is not null)
+                await Db.PutAsync("planned_events",
+                    linkedEvent with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow }, pending: false);
+        }
         _ = Sync.SyncAsync();
 
         Undo.Push($"Удалено: {label}", async () =>
         {
             await Db.PutAsync("meals", item with { UpdatedAtUtc = DateTime.UtcNow }, pending: true);
+            if (linkedEvent is not null)
+                await Db.PutAsync("planned_events",
+                    linkedEvent with { UpdatedAtUtc = DateTime.UtcNow }, pending: false);
             _allEntries.Add(item); FilterDay();
             _ = Sync.SyncAsync();
             await InvokeAsync(StateHasChanged);
         });
+    }
+
+    private async Task SchedulePostMealGlucoseCheckAsync(MealEntryDto meal)
+    {
+        // Meal time in UTC
+        var mealUtc = _date.ToDateTime(meal.Time, DateTimeKind.Local).ToUniversalTime();
+        var checkUtc = mealUtc.AddHours(2);
+
+        // Skip if check time is already in the past
+        if (checkUtc <= DateTime.UtcNow) return;
+
+        // Deduplicate: don't create if there's already a glucose reminder within 30 min of target
+        var existing = await Db.GetAllAsync<PlannedEventDto>("planned_events");
+        var window = TimeSpan.FromMinutes(30);
+        bool alreadyScheduled = existing.Any(e =>
+            !e.IsDeleted &&
+            e.EventType == (int)PlannedEventType.Glucose &&
+            Math.Abs((e.PlannedAtUtc - checkUtc).TotalMinutes) < window.TotalMinutes);
+        if (alreadyScheduled) return;
+
+        var reminder = new PlannedEventDto(
+            Guid.NewGuid(), checkUtc, (int)PlannedEventType.Glucose,
+            "Измерьте сахар после еды", null, null, false, DateTime.UtcNow, false);
+        await Db.PutAsync("planned_events", reminder, pending: false);
     }
 
     private static string MealTypeLabel(MealType t) => t switch

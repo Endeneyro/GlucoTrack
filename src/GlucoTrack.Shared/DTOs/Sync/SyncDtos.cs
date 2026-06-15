@@ -18,7 +18,33 @@ public record GlucoseReadingDto(
     DateTime MeasuredAtUtc,
     double ValueMmol,
     DateTime UpdatedAtUtc,
-    bool IsDeleted);
+    bool IsDeleted,
+    Guid? LinkedEventId = null);
+
+// Planned events are stored client-side (IndexedDB "planned_events") but the DTOs live
+// here in Shared so the calculation/reconciliation logic and its tests can use them.
+public record PlannedEventDto(
+    Guid Id,
+    DateTime PlannedAtUtc,
+    int EventType,
+    string? Note,
+    Guid? GroupId,
+    List<PlannedMealItem>? MealItems,
+    bool IsDone,
+    DateTime UpdatedAtUtc,
+    bool IsDeleted
+);
+
+public record PlannedMealItem(Guid ProductId, string ProductName, double Grams, int MeasureType = 0, double? PieceWeightG = null);
+
+public enum PlannedEventType
+{
+    Meal     = 0,
+    Glucose  = 1,
+    Insulin  = 2,
+    Weight   = 3,
+    Activity = 4
+}
 
 public record InsulinInjectionDto(
     Guid Id,
@@ -28,7 +54,8 @@ public record InsulinInjectionDto(
     double? Carbs,
     double? GlucoseBefore,
     DateTime UpdatedAtUtc,
-    bool IsDeleted);
+    bool IsDeleted,
+    Guid? LinkedEventId = null);
 
 public record ProductIngredientDto(
     Guid Id,
@@ -104,7 +131,13 @@ public record TherapyCoeffDto(
     double InsulinToCarbRatio,
     double InsulinSensitivityFactor,
     DateTime UpdatedAtUtc,
-    bool IsDeleted);
+    bool IsDeleted)
+{
+    public bool CoversTime(TimeOnly t) =>
+        FromTime <= ToTime
+            ? t >= FromTime && t < ToTime   // обычный интервал
+            : t >= FromTime || t < ToTime;  // через полночь (22:00–06:00)
+}
 
 public record UserSettingsDto(
     Guid Id,
@@ -118,6 +151,35 @@ public record UserSettingsDto(
     double DailyCarbs,
     bool DisclaimerAccepted,
     DateTime UpdatedAtUtc,
+    bool IsDeleted,
+    double DiaHours = 4.0);
+
+public record UserProfileDto(
+    Guid Id,
+    double? HeightCm,
+    double? WeightKg,
+    DateOnly? DateOfBirth,
+    int? Gender,
+    int? DiabetesType,
+    int? DiagnosisYear,
+    DateTime UpdatedAtUtc,
+    bool IsDeleted);
+
+public record UserInsulinDto(
+    Guid Id,
+    string Name,
+    int InsulinType,
+    double? TypicalDose,
+    bool IsActive,
+    string? Note,
+    DateTime UpdatedAtUtc,
+    bool IsDeleted);
+
+public record MealTemplateDto(
+    Guid Id,
+    string Name,
+    List<PlannedMealItem> Items,
+    DateTime UpdatedAtUtc,
     bool IsDeleted);
 
 // ── Sync request/response ────────────────────────────────────────────────────
@@ -128,7 +190,9 @@ public record SyncPushRequest(
     List<InsulinInjectionDto> InsulinInjections,
     List<ProductDto> Products,
     List<TherapyCoeffDto> TherapyCoefficients,
-    UserSettingsDto? UserSettings);
+    UserSettingsDto? UserSettings,
+    UserProfileDto? UserProfile = null,
+    List<UserInsulinDto>? UserInsulins = null);
 
 public record SyncPushResponse(
     List<Guid> Conflicts,
@@ -141,4 +205,6 @@ public record SyncPullResponse(
     List<InsulinInjectionDto> InsulinInjections,
     List<ProductDto> Products,
     List<TherapyCoeffDto> TherapyCoefficients,
-    UserSettingsDto? UserSettings);
+    UserSettingsDto? UserSettings,
+    UserProfileDto? UserProfile = null,
+    List<UserInsulinDto>? UserInsulins = null);

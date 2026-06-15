@@ -2,6 +2,7 @@
 @attribute [Authorize]
 @using GlucoTrack.Shared.Calculations
 @using GlucoTrack.Shared.DTOs.Sync
+@using GlucoTrack.Shared.Events
 @inject DbService Db
 
 <PageTitle>Аналитика — GlucoTrack</PageTitle>
@@ -123,7 +124,8 @@
         var settings = (await Db.GetAllAsync<GlucoTrack.Shared.DTOs.Sync.UserSettingsDto>("settings")).FirstOrDefault();
         if (settings is not null)
         {
-            _gLow = settings.TargetGlucoseLow; _gHigh = settings.TargetGlucoseHigh;
+            if (settings.TargetGlucoseLow > 0 && settings.TargetGlucoseHigh > settings.TargetGlucoseLow)
+            { _gLow = settings.TargetGlucoseLow; _gHigh = settings.TargetGlucoseHigh; }
             _targetCal = settings.DailyCalories; _targetProt = settings.DailyProtein;
             _targetFat = settings.DailyFat; _targetCarbs = settings.DailyCarbs;
         }
@@ -162,7 +164,8 @@
             foreach (var entry in day)
             {
                 if (!products.TryGetValue(entry.ProductId, out var p)) continue;
-                var k = entry.Grams / 100.0;
+                var effectiveG = NutritionMath.EffectiveGrams(p.MeasureType, entry.Grams, p.PieceWeightG);
+                var k = effectiveG / 100.0;
                 _sumCal += p.CaloriesPer100g * k; _sumProt += p.ProteinPer100g * k;
                 _sumFat += p.FatPer100g * k; _sumCarbs += p.CarbsPer100g * k;
                 _sumVitC += (p.VitaminC ?? 0) * k; _sumVitA += (p.VitaminA ?? 0) * k;

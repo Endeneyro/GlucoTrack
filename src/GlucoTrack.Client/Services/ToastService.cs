@@ -1,4 +1,5 @@
 using GlucoTrack.Client.Models;
+using GlucoTrack.Shared.DTOs.Sync;
 
 namespace GlucoTrack.Client.Services;
 

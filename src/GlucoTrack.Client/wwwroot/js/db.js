@@ -3,8 +3,8 @@
 // deserializes with case-insensitive matching.
 window.glucoDb = (function () {
     const DB_NAME = 'glucotrack_v1';
-    const DB_VERSION = 2;
-    const STORES = ['meals', 'glucose', 'insulin', 'products', 'therapy', 'settings', 'planned_events'];
+    const DB_VERSION = 5;
+    const STORES = ['meals', 'glucose', 'insulin', 'products', 'therapy', 'settings', 'planned_events', 'profile', 'user_insulins', 'meal_templates', 'modules'];
 
     let _db = null;
 

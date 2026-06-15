@@ -3,6 +3,7 @@
 @using GlucoTrack.Client.Models
 @using GlucoTrack.Shared.DTOs.Sync
 @using GlucoTrack.Shared.Calculations
+@using GlucoTrack.Shared.Events
 @using Microsoft.AspNetCore.Components.Authorization
 @inject DbService Db
 @inject AuthenticationStateProvider AuthProvider
@@ -127,7 +128,7 @@ else
                     <div style="font-size:1.5rem;font-weight:800;color:#3B82F6;line-height:1.1">@_todayCal.ToString("F0")</div>
                     <div style="font-size:.75rem;color:#6B7FA3">съедено</div>
                     <div style="margin-top:.6rem;font-size:.8rem;color:#6B7FA3">Осталось <b style="color:#1A2B4A">@(Math.Max(0, _targetCal - _todayCal).ToString("F0")) ккал</b></div>
-                    <div style="font-size:.8rem;color:#6B7FA3">ХЕ <b style="color:#1A2B4A">@XeCalculator.CarbsToXe(_todayCarbs).ToString("F1")</b></div>
+                    <div style="font-size:.8rem;color:#6B7FA3">ХЕ <b style="color:#1A2B4A">@XeCalculator.CarbsToXe(_todayCarbs, _xeGrams).ToString("F1")</b></div>
                 </div>
             </div>
         </div>
@@ -271,6 +272,7 @@ else
 
     private double _targetCal = 2000, _targetProt = 80, _targetFat = 67, _targetCarbs = 250;
     private double _gLow = 3.9, _gHigh = 10.0;
+    private double _xeGrams = 12;
     private double _todayCal, _todayProt, _todayFat, _todayCarbs;
     private List<GlucoseReadingDto> _todayGlucose = [];
 
@@ -307,8 +309,9 @@ else
         {
             _targetCal   = settings.DailyCalories; _targetProt = settings.DailyProtein;
             _targetFat   = settings.DailyFat;      _targetCarbs = settings.DailyCarbs;
-            _gLow        = settings.TargetGlucoseLow;
-            _gHigh       = settings.TargetGlucoseHigh;
+            if (settings.XeGrams > 0) _xeGrams = settings.XeGrams;
+            if (settings.TargetGlucoseLow > 0 && settings.TargetGlucoseHigh > settings.TargetGlucoseLow)
+            { _gLow = settings.TargetGlucoseLow; _gHigh = settings.TargetGlucoseHigh; }
         }
 
         var today    = DateOnly.FromDateTime(DateTime.Today);
@@ -321,7 +324,8 @@ else
         foreach (var e in todayMeals)
         {
             if (!products.TryGetValue(e.ProductId, out var p)) continue;
-            var k = e.Grams / 100.0;
+            var effG = NutritionMath.EffectiveGrams(p.MeasureType, e.Grams, p.PieceWeightG);
+            var k = effG / 100.0;
             _todayCal   += p.CaloriesPer100g * k; _todayProt  += p.ProteinPer100g * k;
             _todayFat   += p.FatPer100g * k;      _todayCarbs += p.CarbsPer100g * k;
         }
@@ -353,7 +357,8 @@ else
             foreach (var m in dayMeals)
             {
                 if (!products.TryGetValue(m.ProductId, out var p)) continue;
-                var k = m.Grams / 100.0;
+                var effG = NutritionMath.EffectiveGrams(p.MeasureType, m.Grams, p.PieceWeightG);
+                var k = effG / 100.0;
                 kcal += p.CaloriesPer100g * k; prot  += p.ProteinPer100g * k;
                 fat  += p.FatPer100g * k;      carbs += p.CarbsPer100g * k;
             }
@@ -397,7 +402,10 @@ else
             double kcal = 0;
             foreach (var m in grouped)
                 if (products.TryGetValue(m.ProductId, out var p))
-                    kcal += p.CaloriesPer100g * m.Grams / 100.0;
+                {
+                    var effG = NutritionMath.EffectiveGrams(p.MeasureType, m.Grams, p.PieceWeightG);
+                    kcal += p.CaloriesPer100g * effG / 100.0;
+                }
             _mealGroups.Add(new MealGroup(g.Name, g.Icon, g.Range, kcal));
         }
     }

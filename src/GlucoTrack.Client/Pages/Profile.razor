@@ -1,0 +1,635 @@
+@page "/profile"
+@attribute [Authorize]
+@using GlucoTrack.Shared.DTOs.Sync
+@inject DbService Db
+@inject SyncService Sync
+@inject ModuleService Modules
+
+<PageTitle>Профиль — GlucoTrack</PageTitle>
+
+<div style="max-width:700px">
+    <div class="home-date-bar" style="justify-content:space-between">
+        <h2 style="margin:0;font-size:1.25rem;font-weight:700">Мой профиль</h2>
+    </div>
+
+    @if (_loading) { <p style="color:var(--c-text-muted)">Загрузка...</p> }
+    else
+    {
+        <!-- ── Личные данные ─────────────────────────────────────────── -->
+        <div class="home-card" style="margin-bottom:1rem">
+            <div class="home-card-title">Личные данные</div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+                <div class="form-group">
+                    <label>Рост (см)</label>
+                    <input class="form-control" type="number" min="50" max="250" step="1" @bind="_heightCm" placeholder="—" />
+                </div>
+                <div class="form-group">
+                    <label>Вес (кг)</label>
+                    <input class="form-control" type="number" min="10" max="300" step="0.1" @bind="_weightKg" placeholder="—" />
+                </div>
+                <div class="form-group">
+                    <label>Дата рождения</label>
+                    <input class="form-control" type="date" value="@(_dateOfBirth?.ToString("yyyy-MM-dd") ?? "")"
+                           @onchange="e => _dateOfBirth = DateOnly.TryParse(e.Value?.ToString(), out var d) ? d : null" />
+                </div>
+                <div class="form-group">
+                    <label>Пол</label>
+                    <select class="form-control" @bind="_gender">
+                        <option value="">— не указан —</option>
+                        <option value="0">Мужской</option>
+                        <option value="1">Женский</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Тип диабета</label>
+                    <select class="form-control" @bind="_diabetesType">
+                        <option value="">— не указан —</option>
+                        <option value="1">Тип 1</option>
+                        <option value="2">Тип 2</option>
+                        <option value="3">LADA</option>
+                        <option value="4">Другой</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Год постановки диагноза</label>
+                    <input class="form-control" type="number" min="1900" max="2100" step="1" @bind="_diagnosisYear" placeholder="—" />
+                </div>
+            </div>
+
+            @if (_heightCm.HasValue && _weightKg.HasValue && _heightCm > 0)
+            {
+                var bmi = _weightKg.Value / Math.Pow(_heightCm.Value / 100.0, 2);
+                var (bmiLabel, bmiColor) = bmi < 18.5 ? ("дефицит", "#3B82F6")
+                    : bmi < 25 ? ("норма", "#10B981")
+                    : bmi < 30 ? ("избыток", "#F59E0B")
+                    : ("ожирение", "#EF4444");
+                <div style="margin-top:.5rem;font-size:.82rem;color:var(--c-text-muted)">
+                    ИМТ: <strong style="color:@bmiColor">@bmi.ToString("F1")</strong>
+                    <span style="margin-left:.35rem;padding:.1rem .45rem;border-radius:999px;background:@bmiColor;color:#fff;font-size:.72rem">@bmiLabel</span>
+                </div>
+            }
+            @if (_dateOfBirth.HasValue)
+            {
+                var today = DateOnly.FromDateTime(DateTime.Today);
+                var age = today.Year - _dateOfBirth.Value.Year;
+                if (_dateOfBirth.Value.AddYears(age) > today) age--;
+                <div style="margin-top:.25rem;font-size:.82rem;color:var(--c-text-muted)">Возраст: <strong>@age лет</strong></div>
+            }
+
+            <div style="margin-top:1rem">
+                <button class="btn btn-primary btn-sm" @onclick="SaveProfileAsync" disabled="@_savingProfile">
+                    @(_savingProfile ? "Сохранение..." : "Сохранить")
+                </button>
+                @if (_profileMsg is not null)
+                { <span style="margin-left:.75rem;font-size:.82rem;color:var(--c-success)">@_profileMsg</span> }
+            </div>
+        </div>
+
+        <!-- ── Цели питания ──────────────────────────────────────────── -->
+        <div class="home-card" style="margin-bottom:1rem">
+            <div class="home-card-title">Цели питания</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+                <div class="form-group">
+                    <label>Калории (ккал/день)</label>
+                    <input class="form-control" type="number" @bind="_cal" />
+                </div>
+                <div class="form-group">
+                    <label>Белки (г/день)</label>
+                    <input class="form-control" type="number" @bind="_prot" />
+                </div>
+                <div class="form-group">
+                    <label>Жиры (г/день)</label>
+                    <input class="form-control" type="number" @bind="_fat" />
+                </div>
+                <div class="form-group">
+                    <label>Углеводы (г/день)</label>
+                    <input class="form-control" type="number" @bind="_carbs" />
+                </div>
+            </div>
+            <div class="form-group" style="max-width:200px;margin-top:.25rem">
+                <label>Граммов на 1 ХЕ</label>
+                <input class="form-control" type="number" step="0.5" @bind="_xe" />
+            </div>
+            <div style="margin-top:1rem">
+                <button class="btn btn-primary btn-sm" @onclick="SaveSettingsAsync" disabled="@_savingSettings">
+                    @(_savingSettings ? "Сохранение..." : "Сохранить")
+                </button>
+                @if (_settingsMsg is not null)
+                { <span style="margin-left:.75rem;font-size:.82rem;color:var(--c-success)">@_settingsMsg</span> }
+            </div>
+        </div>
+
+        <!-- ── Цели по глюкозе ───────────────────────────────────────── -->
+        <div class="home-card" style="margin-bottom:1rem">
+            <div class="home-card-title">Цели по глюкозе (ммоль/л)</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.75rem">
+                <div class="form-group">
+                    <label>Нижняя граница</label>
+                    <input class="form-control" type="number" step="0.1" @bind="_gLow" />
+                </div>
+                <div class="form-group">
+                    <label>Верхняя граница</label>
+                    <input class="form-control" type="number" step="0.1" @bind="_gHigh" />
+                </div>
+                <div class="form-group">
+                    <label>Целевой уровень</label>
+                    <input class="form-control" type="number" step="0.1" @bind="_gTarget" />
+                </div>
+            </div>
+            <div class="form-group" style="margin-top:1rem;max-width:320px">
+                <label>
+                    Время действия инсулина (DIA), ч
+                    <span style="font-size:.78rem;color:var(--c-text-muted);font-weight:400"> — 3–5 ч, обычно 4 ч</span>
+                </label>
+                <div style="display:flex;align-items:center;gap:.75rem">
+                    <input type="range" min="3" max="5" step="0.5" @bind="_diaHours" style="flex:1" />
+                    <span style="font-weight:600;min-width:2rem">@_diaHours.ToString("F1") ч</span>
+                </div>
+                <div style="font-size:.78rem;color:var(--c-text-muted);margin-top:.25rem">
+                    Влияет на расчёт активного инсулина (IOB). Дети: 3 ч, взрослые с резистентностью: до 5 ч.
+                </div>
+            </div>
+            <div style="margin-top:1rem">
+                <button class="btn btn-primary btn-sm" @onclick="SaveSettingsAsync" disabled="@_savingSettings">
+                    @(_savingSettings ? "Сохранение..." : "Сохранить")
+                </button>
+                @if (_settingsMsg is not null)
+                { <span style="margin-left:.75rem;font-size:.82rem;color:var(--c-success)">@_settingsMsg</span> }
+            </div>
+        </div>
+
+        <!-- ── Мои инсулины ─────────────────────────────────────────── -->
+        <div class="home-card" style="margin-bottom:1rem">
+            <div class="home-card-title">Мои инсулины</div>
+
+            @if (_insulins.Count > 0)
+            {
+                <div style="display:flex;flex-direction:column;gap:.5rem;margin-bottom:1rem">
+                    @foreach (var ins in _insulins.Where(i => !i.IsDeleted).OrderBy(i => i.InsulinType).ThenBy(i => i.Name))
+                    {
+                        <div style="display:flex;align-items:center;gap:.75rem;padding:.6rem .75rem;background:var(--c-bg-secondary);border-radius:var(--r-md)">
+                            <span style="font-size:.72rem;padding:.15rem .5rem;border-radius:999px;background:@(ins.InsulinType == 0 ? "#3B82F6" : "#8B5CF6");color:#fff">
+                                @(ins.InsulinType == 0 ? "болюс" : "базал")
+                            </span>
+                            <span style="flex:1;font-weight:600;font-size:.9rem">@ins.Name</span>
+                            @if (ins.TypicalDose.HasValue)
+                            {
+                                <span style="font-size:.8rem;color:var(--c-text-muted)">
+                                    @(ins.InsulinType == 0 ? "типично" : "суточная доза"):
+                                    @ins.TypicalDose.Value.ToString("F1") ЕД
+                                </span>
+                            }
+                            @if (!string.IsNullOrEmpty(ins.Note))
+                            {
+                                <span style="font-size:.78rem;color:var(--c-text-muted)">· @ins.Note</span>
+                            }
+                            @if (!ins.IsActive)
+                            {
+                                <span style="font-size:.72rem;color:var(--c-text-muted)">[неактивен]</span>
+                            }
+                            <button class="btn btn-ghost btn-icon btn-sm" @onclick="() => StartEditInsulin(ins)">✏️</button>
+                            <button class="btn btn-ghost btn-icon btn-sm" @onclick="() => DeleteInsulinAsync(ins)">🗑</button>
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <p style="font-size:.875rem;color:var(--c-text-muted);margin-bottom:1rem">Инсулины не добавлены.</p>
+            }
+
+            <!-- Форма добавления/редактирования -->
+            @if (_editingInsulin)
+            {
+                <div style="border:1.5px solid var(--c-primary);border-radius:var(--r-md);padding:.875rem;margin-bottom:.5rem">
+                    <div style="font-weight:600;font-size:.875rem;margin-bottom:.75rem">
+                        @(_editInsulinId == Guid.Empty ? "Добавить инсулин" : "Редактировать")
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+                        <div class="form-group" style="grid-column:1/-1">
+                            <label>Название *</label>
+                            <input class="form-control" type="text" placeholder="НовоРапид, Лантус..." @bind="_insName" />
+                        </div>
+                        <div class="form-group">
+                            <label>Тип</label>
+                            <select class="form-control" @bind="_insType">
+                                <option value="0">Болюс (короткий)</option>
+                                <option value="1">Базал (длинный)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>@(_insType == 0 ? "Типичная доза болюса (ЕД)" : "Суточная доза базала (ЕД)")</label>
+                            <input class="form-control" type="number" min="0" step="0.5" @bind="_insDose" placeholder="необязательно" />
+                        </div>
+                        <div class="form-group" style="grid-column:1/-1">
+                            <label>Заметка</label>
+                            <input class="form-control" type="text" placeholder="Например: утром, или только по схеме..." @bind="_insNote" />
+                        </div>
+                        <div class="form-group" style="grid-column:1/-1;display:flex;align-items:center;gap:.5rem">
+                            <input type="checkbox" id="ins-active" @bind="_insActive" />
+                            <label for="ins-active" style="margin:0;cursor:pointer">Активно использую сейчас</label>
+                        </div>
+                    </div>
+                    @if (_insError is not null)
+                    { <div style="font-size:.82rem;color:var(--c-danger);margin-bottom:.5rem">@_insError</div> }
+                    <div style="display:flex;gap:.5rem">
+                        <button class="btn btn-primary btn-sm" @onclick="SaveInsulinAsync" disabled="@_savingInsulin">
+                            @(_savingInsulin ? "..." : "Сохранить")
+                        </button>
+                        <button class="btn btn-ghost btn-sm" @onclick="CancelInsulinEdit">Отмена</button>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <button class="btn btn-ghost btn-sm" @onclick="StartAddInsulin">+ Добавить инсулин</button>
+            }
+        </div>
+
+        <!-- ── Коэффициенты терапии ─────────────────────────────────── -->
+        <div class="home-card" style="margin-bottom:1rem">
+            <div class="home-card-title">Коэффициенты терапии (IC и ISF)</div>
+            <p style="font-size:.82rem;color:var(--c-text-muted);margin-bottom:1rem">
+                IC — граммов углеводов на 1 ЕД · ISF — снижение глюкозы (ммоль/л) на 1 ЕД
+            </p>
+
+            @if (_coeffs.Count > 0)
+            {
+                <table class="data-table" style="margin-bottom:1rem">
+                    <thead><tr><th>С</th><th>До</th><th>IC</th><th>ISF</th><th></th></tr></thead>
+                    <tbody>
+                        @foreach (var c in _coeffs.Where(x => !x.IsDeleted).OrderBy(x => x.FromTime))
+                        {
+                            <tr>
+                                <td>@c.FromTime.ToString("HH:mm")</td>
+                                <td>@c.ToTime.ToString("HH:mm")</td>
+                                <td>@c.InsulinToCarbRatio г/ЕД</td>
+                                <td>@c.InsulinSensitivityFactor ммоль/ЕД</td>
+                                <td><button class="btn btn-danger btn-sm btn-icon" @onclick="() => DeleteCoeffAsync(c.Id)">✕</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            else
+            {
+                <p style="color:var(--c-text-muted);font-size:.875rem;margin-bottom:1rem">Интервалы не добавлены.</p>
+            }
+
+            <!-- Авторасчёт -->
+            <div style="background:var(--c-primary-ultra);border:1.5px solid var(--c-primary-light,#BFDBFE);border-radius:var(--r-md);padding:.875rem;margin-bottom:1rem">
+                <div style="font-weight:600;font-size:.875rem;margin-bottom:.35rem">Рассчитать из данных</div>
+                <p style="font-size:.82rem;color:var(--c-text-muted);margin-bottom:.75rem">
+                    По правилу 500/100: IC = 500 ÷ СДИ, ISF = 100 ÷ СДИ. Последние 14 дней, без дней с гипо (&lt;3.5) и взлётами (&gt;15).
+                </p>
+                @if (_calcError is not null)
+                { <div style="font-size:.82rem;color:var(--c-danger);margin-bottom:.5rem">@_calcError</div> }
+                @if (_calcResult is not null)
+                {
+                    <div style="background:var(--c-bg);border:1px solid var(--c-border);border-radius:var(--r-md);padding:.75rem;margin-bottom:.75rem">
+                        <div style="font-size:.82rem;color:var(--c-text-muted);margin-bottom:.35rem">
+                            СДИ за @_calcResult.DaysUsed дн. (@_calcResult.DaysExcluded исключено): <strong>@_calcResult.AvgTdd.ToString("F1") ЕД</strong>
+                        </div>
+                        <div style="font-size:1rem;font-weight:700;margin-bottom:.5rem">
+                            IC = <span style="color:var(--c-primary)">@_calcResult.Ic.ToString("F1")</span> г/ЕД &nbsp;·&nbsp;
+                            ISF = <span style="color:var(--c-primary)">@_calcResult.Isf.ToString("F2")</span> ммоль/ЕД
+                        </div>
+                        <div style="font-size:.78rem;color:var(--c-text-muted);margin-bottom:.5rem">
+                            Расчётные значения — отправная точка. Корректируйте совместно с эндокринологом.
+                        </div>
+                        <div style="display:flex;gap:.5rem">
+                            <button class="btn btn-primary btn-sm" @onclick="ApplyCalcResult">Применить (00:00–23:59)</button>
+                            <button class="btn btn-ghost btn-sm" @onclick="() => _calcResult = null">Отмена</button>
+                        </div>
+                    </div>
+                }
+                <button class="btn btn-ghost btn-sm" @onclick="CalcFromDataAsync" disabled="@_calcLoading">
+                    @(_calcLoading ? "Считаю..." : "Рассчитать")
+                </button>
+            </div>
+
+            <!-- Добавить интервал -->
+            <div style="background:var(--c-bg-secondary);border-radius:var(--r-md);padding:.875rem">
+                <div style="font-weight:600;font-size:.875rem;margin-bottom:.5rem">+ Добавить интервал</div>
+                <p style="font-size:.78rem;color:var(--c-text-muted);margin-bottom:.75rem">
+                    Разные IC/ISF для разного времени суток. Для одного значения: 00:00–23:59.
+                </p>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:.75rem">
+                    <div class="form-group">
+                        <label>С</label>
+                        <input class="form-control" type="time" value="@_cFrom"
+                               @oninput="e => _cFrom = e.Value?.ToString() ?? _cFrom" />
+                    </div>
+                    <div class="form-group">
+                        <label>До</label>
+                        <input class="form-control" type="time" value="@_cTo"
+                               @oninput="e => _cTo = e.Value?.ToString() ?? _cTo" />
+                    </div>
+                    <div class="form-group">
+                        <label>IC (г углеводов / 1 ЕД)</label>
+                        <input class="form-control" type="number" step="0.5" min="1" @bind="_cIc" />
+                    </div>
+                    <div class="form-group">
+                        <label>ISF (ммоль/л / 1 ЕД)</label>
+                        <input class="form-control" type="number" step="0.1" min="0.1" @bind="_cIsf" />
+                    </div>
+                </div>
+                @if (_coeffErr is not null)
+                { <div style="font-size:.82rem;color:var(--c-danger);margin-bottom:.5rem">@_coeffErr</div> }
+                <button class="btn btn-primary btn-sm" @onclick="AddCoeffAsync">Добавить</button>
+            </div>
+        </div>
+    }
+
+    <!-- ── Modules ──────────────────────────────────────────────────────────── -->
+    <div class="form-card" style="margin-top:1.5rem">
+        <h3 style="margin-bottom:1rem">⚙️ Модули приложения</h3>
+        <p style="font-size:.85rem;color:var(--c-text-muted);margin-bottom:1rem">
+            Модули включаются автоматически по типу диабета. Вы можете изменить вручную.
+        </p>
+        <div style="display:flex;flex-direction:column;gap:.75rem">
+            <label style="display:flex;align-items:center;gap:.75rem;cursor:pointer">
+                <input type="checkbox" checked="@Modules.GlucoseModule"
+                       @onchange="ToggleGlucose" style="width:18px;height:18px" />
+                <div>
+                    <div style="font-weight:600">📈 Глюкоза</div>
+                    <div style="font-size:.8rem;color:var(--c-text-muted)">Дневник измерений сахара крови</div>
+                </div>
+            </label>
+            <label style="display:flex;align-items:center;gap:.75rem;cursor:pointer">
+                <input type="checkbox" checked="@Modules.InsulinModule"
+                       @onchange="ToggleInsulin" style="width:18px;height:18px" />
+                <div>
+                    <div style="font-weight:600">💉 Инсулин</div>
+                    <div style="font-size:.8rem;color:var(--c-text-muted)">Журнал инъекций, виды инсулина</div>
+                </div>
+            </label>
+            <label style="display:flex;align-items:center;gap:.75rem;cursor:pointer">
+                <input type="checkbox" checked="@Modules.BolusCalc" disabled="@(!Modules.InsulinModule)"
+                       @onchange="ToggleBolus" style="width:18px;height:18px" />
+                <div>
+                    <div style="font-weight:600">🧮 Калькулятор болюса</div>
+                    <div style="font-size:.8rem;color:var(--c-text-muted)">Расчёт доз на еду и коррекцию (требует: Инсулин)</div>
+                </div>
+            </label>
+            <label style="display:flex;align-items:center;gap:.75rem;cursor:pointer">
+                <input type="checkbox" checked="@Modules.AdvancedBolusModule" disabled="@(!Modules.BolusCalc)"
+                       @onchange="ToggleAdvancedBolus" style="width:18px;height:18px" />
+                <div>
+                    <div style="font-weight:600">🔬 Расширенный болюс</div>
+                    <div style="font-size:.8rem;color:var(--c-text-muted)">IOB, пред-болюс по ГИ + сахару, гипо-защита (требует: Калькулятор)</div>
+                </div>
+            </label>
+        </div>
+    </div>
+</div>
+
+@code {
+    private bool _loading = true;
+
+    // ── Profile ───────────────────────────────────────────────────────────────
+    private Guid _profileId = Guid.NewGuid();
+    private double? _heightCm, _weightKg;
+    private DateOnly? _dateOfBirth;
+    private string _gender = "", _diabetesType = "";
+    private int? _diagnosisYear;
+    private bool _savingProfile;
+    private string? _profileMsg;
+
+    // ── Settings ──────────────────────────────────────────────────────────────
+    private Guid _settingsId = Guid.NewGuid();
+    private double _cal = 2000, _prot = 80, _fat = 67, _carbs = 250, _xe = 12;
+    private double _gLow = 3.9, _gHigh = 10.0, _gTarget = 6.0;
+    private double _diaHours = 4.0;
+    private bool _savingSettings;
+    private string? _settingsMsg;
+
+    // ── User insulins ─────────────────────────────────────────────────────────
+    private List<UserInsulinDto> _insulins = [];
+    private bool _editingInsulin, _savingInsulin;
+    private Guid _editInsulinId = Guid.Empty;
+    private string _insName = "", _insNote = "";
+    private int _insType = 0;
+    private double? _insDose;
+    private bool _insActive = true;
+    private string? _insError;
+
+    // ── Therapy coefficients ──────────────────────────────────────────────────
+    private List<TherapyCoeffDto> _coeffs = [];
+    private string _cFrom = "00:00", _cTo = "23:59";
+    private double _cIc = 10, _cIsf = 2.0;
+    private string? _coeffErr;
+
+    private record CalcResult(double AvgTdd, double Ic, double Isf, int DaysUsed, int DaysExcluded);
+    private CalcResult? _calcResult;
+    private bool _calcLoading;
+    private string? _calcError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Profile
+        var profiles = await Db.GetAllAsync<UserProfileDto>("profile");
+        if (profiles.FirstOrDefault() is { } prof)
+        {
+            _profileId = prof.Id;
+            _heightCm = prof.HeightCm; _weightKg = prof.WeightKg;
+            _dateOfBirth = prof.DateOfBirth;
+            _gender = prof.Gender?.ToString() ?? "";
+            _diabetesType = prof.DiabetesType?.ToString() ?? "";
+            _diagnosisYear = prof.DiagnosisYear;
+        }
+
+        // Settings
+        var settingsList = await Db.GetAllAsync<UserSettingsDto>("settings");
+        if (settingsList.FirstOrDefault() is { } s)
+        {
+            _settingsId = s.Id;
+            _cal = s.DailyCalories; _prot = s.DailyProtein;
+            _fat = s.DailyFat; _carbs = s.DailyCarbs; _xe = s.XeGrams;
+            _gLow = s.TargetGlucoseLow; _gHigh = s.TargetGlucoseHigh; _gTarget = s.TargetGlucose;
+            _diaHours = s.DiaHours > 0 ? s.DiaHours : 4.0;
+        }
+
+        // Insulins
+        _insulins = (await Db.GetAllAsync<UserInsulinDto>("user_insulins"))
+            .Where(i => !i.IsDeleted).ToList();
+
+        // Therapy
+        _coeffs = (await Db.GetAllAsync<TherapyCoeffDto>("therapy"))
+            .Where(c => !c.IsDeleted).ToList();
+
+        _loading = false;
+    }
+
+    // ── Profile save ──────────────────────────────────────────────────────────
+
+    private async Task SaveProfileAsync()
+    {
+        _savingProfile = true; _profileMsg = null;
+        var dto = new UserProfileDto(
+            _profileId,
+            _heightCm, _weightKg, _dateOfBirth,
+            string.IsNullOrEmpty(_gender) ? null : int.Parse(_gender),
+            string.IsNullOrEmpty(_diabetesType) ? null : int.Parse(_diabetesType),
+            _diagnosisYear,
+            DateTime.UtcNow, false);
+        await Db.PutAsync("profile", dto, pending: true);
+        await Modules.InitAsync(); // re-evaluate module flags when diabetes type changes
+        _ = Sync.SyncAsync();
+        _savingProfile = false;
+        _profileMsg = "✓ Сохранено";
+        await Task.Delay(2500);
+        _profileMsg = null;
+    }
+
+    // ── Settings save ─────────────────────────────────────────────────────────
+
+    private async Task SaveSettingsAsync()
+    {
+        _savingSettings = true; _settingsMsg = null;
+        var dto = new UserSettingsDto(
+            _settingsId, _gLow, _gHigh, _gTarget, _xe,
+            _cal, _prot, _fat, _carbs,
+            DisclaimerAccepted: true, DateTime.UtcNow, IsDeleted: false,
+            DiaHours: _diaHours > 0 ? _diaHours : 4.0);
+        await Db.PutAsync("settings", dto, pending: true);
+        _ = Sync.SyncAsync();
+        _savingSettings = false;
+        _settingsMsg = "✓ Сохранено";
+        await Task.Delay(2500);
+        _settingsMsg = null;
+    }
+
+    // ── Insulin CRUD ──────────────────────────────────────────────────────────
+
+    private void StartAddInsulin()
+    {
+        _editInsulinId = Guid.Empty; _insName = ""; _insNote = "";
+        _insType = 0; _insDose = null; _insActive = true; _insError = null;
+        _editingInsulin = true;
+    }
+
+    private void StartEditInsulin(UserInsulinDto ins)
+    {
+        _editInsulinId = ins.Id; _insName = ins.Name; _insNote = ins.Note ?? "";
+        _insType = ins.InsulinType; _insDose = ins.TypicalDose;
+        _insActive = ins.IsActive; _insError = null;
+        _editingInsulin = true;
+    }
+
+    private void CancelInsulinEdit() { _editingInsulin = false; _insError = null; }
+
+    private async Task SaveInsulinAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_insName)) { _insError = "Введите название инсулина"; return; }
+        _savingInsulin = true; _insError = null;
+
+        var dto = new UserInsulinDto(
+            _editInsulinId == Guid.Empty ? Guid.NewGuid() : _editInsulinId,
+            _insName.Trim(), _insType, _insDose, _insActive,
+            string.IsNullOrWhiteSpace(_insNote) ? null : _insNote.Trim(),
+            DateTime.UtcNow, false);
+
+        await Db.PutAsync("user_insulins", dto, pending: true);
+        _ = Sync.SyncAsync();
+
+        var idx = _insulins.FindIndex(i => i.Id == dto.Id);
+        if (idx >= 0) _insulins[idx] = dto;
+        else _insulins.Add(dto);
+
+        _savingInsulin = false;
+        _editingInsulin = false;
+    }
+
+    private async Task DeleteInsulinAsync(UserInsulinDto ins)
+    {
+        var deleted = ins with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow };
+        await Db.PutAsync("user_insulins", deleted, pending: true);
+        _ = Sync.SyncAsync();
+        _insulins.RemoveAll(i => i.Id == ins.Id);
+    }
+
+    // ── Therapy coefficients ──────────────────────────────────────────────────
+
+    private async Task AddCoeffAsync()
+    {
+        _coeffErr = null;
+        if (!TimeOnly.TryParse(_cFrom, out var from) || !TimeOnly.TryParse(_cTo, out var to))
+        { _coeffErr = "Неверный формат времени"; return; }
+        if (_cIc <= 0 || _cIsf <= 0)
+        { _coeffErr = "IC и ISF должны быть больше 0"; return; }
+
+        var dto = new TherapyCoeffDto(Guid.NewGuid(), from, to, _cIc, _cIsf, DateTime.UtcNow, false);
+        await Db.PutAsync("therapy", dto, pending: true);
+        _coeffs.Add(dto);
+        _ = Sync.SyncAsync();
+    }
+
+    private async Task DeleteCoeffAsync(Guid id)
+    {
+        var existing = _coeffs.FirstOrDefault(c => c.Id == id);
+        if (existing is null) return;
+        var deleted = existing with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow };
+        await Db.PutAsync("therapy", deleted, pending: true);
+        _coeffs.RemoveAll(c => c.Id == id);
+        _ = Sync.SyncAsync();
+    }
+
+    private async Task CalcFromDataAsync()
+    {
+        _calcLoading = true; _calcError = null; _calcResult = null;
+        StateHasChanged();
+        try
+        {
+            var since = DateTime.UtcNow.AddDays(-14).Date;
+            var insulin = (await Db.GetAllAsync<InsulinInjectionDto>("insulin"))
+                .Where(i => !i.IsDeleted && i.InjectedAtUtc >= since).ToList();
+            var glucose = (await Db.GetAllAsync<GlucoseReadingDto>("glucose"))
+                .Where(g => !g.IsDeleted && g.MeasuredAtUtc >= since).ToList();
+
+            if (insulin.Count == 0)
+            { _calcError = "Нет данных об инсулине за последние 14 дней."; return; }
+
+            var glucoseByDay = glucose
+                .GroupBy(g => g.MeasuredAtUtc.ToLocalTime().Date)
+                .ToDictionary(g => g.Key, g => (Min: g.Min(x => x.ValueMmol), Max: g.Max(x => x.ValueMmol)));
+
+            var insulinByDay = insulin
+                .GroupBy(i => i.InjectedAtUtc.ToLocalTime().Date)
+                .ToDictionary(g => g.Key, g => g.Sum(x => x.Units));
+
+            var goodDays = new List<double>(); int excluded = 0;
+            foreach (var (day, tdd) in insulinByDay)
+            {
+                if (glucoseByDay.TryGetValue(day, out var ex) && (ex.Min < 3.5 || ex.Max > 15))
+                { excluded++; continue; }
+                goodDays.Add(tdd);
+            }
+
+            if (goodDays.Count < 3)
+            { _calcError = $"Недостаточно обычных дней (нужно минимум 3, доступно {goodDays.Count})."; return; }
+
+            double avgTdd = goodDays.Average();
+            _calcResult = new(Math.Round(avgTdd, 1), Math.Round(500.0 / avgTdd, 1),
+                Math.Round(100.0 / avgTdd, 2), goodDays.Count, excluded);
+        }
+        finally { _calcLoading = false; }
+    }
+
+    private async Task ApplyCalcResult()
+    {
+        if (_calcResult is null) return;
+        var dto = new TherapyCoeffDto(Guid.NewGuid(), TimeOnly.MinValue, new TimeOnly(23, 59),
+            _calcResult.Ic, _calcResult.Isf, DateTime.UtcNow, false);
+        await Db.PutAsync("therapy", dto, pending: true);
+        _coeffs.Add(dto);
+        _ = Sync.SyncAsync();
+        _calcResult = null;
+    }
+
+    private async Task ToggleGlucose(ChangeEventArgs e)        => await Modules.SetOverrideAsync("glucose",        (bool)e.Value!);
+    private async Task ToggleInsulin(ChangeEventArgs e)        => await Modules.SetOverrideAsync("insulin",        (bool)e.Value!);
+    private async Task ToggleBolus(ChangeEventArgs e)          => await Modules.SetOverrideAsync("bolus",          (bool)e.Value!);
+    private async Task ToggleAdvancedBolus(ChangeEventArgs e)  => await Modules.SetOverrideAsync("advanced_bolus", (bool)e.Value!);
+}

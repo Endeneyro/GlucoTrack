@@ -2,9 +2,12 @@
 @attribute [Authorize]
 @using GlucoTrack.Client.Models
 @using GlucoTrack.Shared.DTOs.Sync
+@using GlucoTrack.Shared.Events
 @inject DbService Db
 @inject SyncService Sync
 @inject NavigationManager Nav
+@inject ToastService Toasts
+@implements IDisposable
 
 <PageTitle>Календарь — GlucoTrack</PageTitle>
 
@@ -48,7 +51,21 @@
             Дневник дня · @_selected.ToString("d MMMM", _ru)
         </div>
 
-        @if (_alertGlucose.HasValue && _selected == DateOnly.FromDateTime(DateTime.Today))
+        @if (_criticalGlucose.HasValue && _selected == DateOnly.FromDateTime(DateTime.Today))
+        {
+            <div style="background:#FEF2F2;border:1.5px solid #F87171;border-radius:var(--r-md);padding:.75rem 1rem;margin-bottom:1rem;display:flex;align-items:center;gap:.75rem">
+                <span style="font-size:1.3rem">🚨</span>
+                <div style="flex:1;font-size:.875rem">
+                    <div style="font-weight:600;color:#991B1B">Глюкоза @_criticalGlucose.Value.ToString("F1") ммоль/л — критически высокая</div>
+                    <div style="color:#B91C1C">Сделайте коррекционный укол сейчас, а приём пищи отодвиньте. Перед едой потом колите только дозу на углеводы.</div>
+                </div>
+                <button class="btn btn-sm" style="background:#DC2626;color:#fff;flex-shrink:0"
+                        @onclick="() => GoToInsulinAlert(_criticalGlucose!.Value)">
+                    Ввести коррекцию
+                </button>
+            </div>
+        }
+        else if (_alertGlucose.HasValue && _selected == DateOnly.FromDateTime(DateTime.Today))
         {
             <div style="background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:var(--r-md);padding:.75rem 1rem;margin-bottom:1rem;display:flex;align-items:center;gap:.75rem">
                 <span style="font-size:1.3rem">⚠️</span>
@@ -57,9 +74,19 @@
                     <div style="color:#B45309">Рекомендуется коррекционный укол инсулина</div>
                 </div>
                 <button class="btn btn-sm" style="background:#F59E0B;color:#fff;flex-shrink:0"
-                        @onclick="GoToInsulinAlert">
+                        @onclick="() => GoToInsulinAlert(_alertGlucose!.Value)">
                     Ввести инъекцию
                 </button>
+            </div>
+        }
+        else if (_pendingBolusTime.HasValue && _selected == DateOnly.FromDateTime(DateTime.Today))
+        {
+            <div style="background:#EFF6FF;border:1.5px solid #BFDBFE;border-radius:var(--r-md);padding:.75rem 1rem;margin-bottom:1rem;display:flex;align-items:center;gap:.75rem">
+                <span style="font-size:1.3rem">🍽</span>
+                <div style="flex:1;font-size:.875rem">
+                    <div style="font-weight:600;color:#1e40af">Сахар выше нормы, но скоро плановый болюс в @_pendingBolusTime.Value.ToString("HH:mm")</div>
+                    <div style="color:#1d4ed8">Коррекция будет учтена в нём — отдельную инъекцию делать не нужно, иначе инсулин «сложится».</div>
+                </div>
             </div>
         }
 
@@ -147,7 +174,9 @@
     </div>
 </div>
 
-<PlanModal Visible="_modalOpen" Date="_selected" EditEvent="_editEvent" OnClose="@CloseModal" OnSaved="@OnEventSaved" />
+<PlanModal Visible="_modalOpen" Date="_selected" EditEvent="_editEvent"
+           CurrentGlucose="_lastGlucose"
+           OnClose="@CloseModal" OnSaved="@OnEventSaved" />
 
 @if (_viewMealOpen && _viewMealEvent is not null)
 {
@@ -172,7 +201,7 @@
                     {
                         <div style="display:flex;justify-content:space-between;padding:.4rem 0;border-bottom:1px solid var(--c-border);font-size:.875rem">
                             <span>@mi.ProductName</span>
-                            <span style="color:var(--c-text-muted)">@mi.Grams.ToString("F0") г</span>
+                            <span style="color:var(--c-text-muted)">@mi.Grams.ToString("F0") @(mi.MeasureType == 1 ? "шт" : "г")</span>
                         </div>
                     }
                 </div>
@@ -205,14 +234,29 @@
     private PlannedEventDto? _viewMealEvent;
     private PlannedEventDto? _editEvent;
 
-    // High-glucose alert
+    // Last known glucose for pre-bolus pause calculation in PlanModal
+    private double _lastGlucose;
+
+    // High-glucose alert (логика порогов — в GlucoseAlertDecider)
     private double? _alertGlucose;   // set when glucose > target and no recent insulin
+    private double? _criticalGlucose; // set when glucose is critically high (correct now, delay meal)
+    private TimeOnly? _pendingBolusTime; // set when glucose high but a planned bolus is imminent
 
     protected override async Task OnInitializedAsync()
     {
+        Toasts.OnChanged += OnToastsChanged;
         BuildCalendarDays();
         await LoadDataAsync();
     }
+
+    // A planned event marked done from a toast must refresh the diary/event list here.
+    private async void OnToastsChanged()
+    {
+        await LoadDataAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose() => Toasts.OnChanged -= OnToastsChanged;
 
     private void BuildCalendarDays()
     {
@@ -261,23 +305,36 @@
                 if (ev.IsDone)
                 {
                     var evLocal = ev.PlannedAtUtc.ToLocalTime();
-                    resultText = type switch
+                    if (type == PlannedEventType.Glucose)
                     {
-                        PlannedEventType.Glucose => glucoseAll
-                            .Where(g => Math.Abs((g.MeasuredAtUtc.ToLocalTime() - evLocal).TotalMinutes) <= 15)
-                            .OrderBy(g => Math.Abs((g.MeasuredAtUtc.ToLocalTime() - evLocal).TotalMinutes))
-                            .Select(g => $"{g.ValueMmol:F1} ммоль/л")
-                            .FirstOrDefault(),
-                        PlannedEventType.Insulin => insulinAll
-                            .Where(i => Math.Abs((i.InjectedAtUtc.ToLocalTime() - evLocal).TotalMinutes) <= 15)
-                            .OrderBy(i => Math.Abs((i.InjectedAtUtc.ToLocalTime() - evLocal).TotalMinutes))
-                            .Select(i => $"{i.Units:F1} ЕД {((GlucoTrack.Shared.Entities.InsulinType)i.InsulinType == GlucoTrack.Shared.Entities.InsulinType.Bolus ? "болюс" : "базал")}")
-                            .FirstOrDefault(),
-                        PlannedEventType.Meal => "съедено",
-                        PlannedEventType.Activity => "выполнено",
-                        PlannedEventType.Weight => "зафиксировано",
-                        _ => null
-                    };
+                        var found = glucoseAll.FirstOrDefault(g => g.LinkedEventId == ev.Id)
+                            ?? glucoseAll.Where(g => Math.Abs((g.MeasuredAtUtc.ToLocalTime() - evLocal).TotalMinutes) <= 15)
+                                         .OrderBy(g => Math.Abs((g.MeasuredAtUtc.ToLocalTime() - evLocal).TotalMinutes))
+                                         .FirstOrDefault();
+                        resultText = found is not null ? $"{found.ValueMmol:F1} ммоль/л" : null;
+                    }
+                    else if (type == PlannedEventType.Insulin)
+                    {
+                        var found = insulinAll.FirstOrDefault(i => i.LinkedEventId == ev.Id)
+                            ?? insulinAll.Where(i => Math.Abs((i.InjectedAtUtc.ToLocalTime() - evLocal).TotalMinutes) <= 15)
+                                         .OrderBy(i => Math.Abs((i.InjectedAtUtc.ToLocalTime() - evLocal).TotalMinutes))
+                                         .FirstOrDefault();
+                        if (found is not null)
+                        {
+                            var typeLabel = (GlucoTrack.Shared.Entities.InsulinType)found.InsulinType == GlucoTrack.Shared.Entities.InsulinType.Bolus ? "болюс" : "базал";
+                            resultText = $"{found.Units:F1} ЕД · {typeLabel}";
+                        }
+                    }
+                    else
+                    {
+                        resultText = type switch
+                        {
+                            PlannedEventType.Meal     => "съедено",
+                            PlannedEventType.Activity => "выполнено",
+                            PlannedEventType.Weight   => "зафиксировано",
+                            _ => null
+                        };
+                    }
                 }
 
                 string? sub = ev.Note;
@@ -294,46 +351,57 @@
             }
         }
 
-        // Build sets of real records already "covered" by a done planned event (±15 min)
-        var doneGlucoseIds = new HashSet<Guid>();
-        var doneInsulinIds = new HashSet<Guid>();
-        if (_eventsByDate.TryGetValue(_selected, out var doneEvents))
+        // Реальные записи, скрытые за выполненным плановым событием — по явной ссылке (надёжно) или ±15 мин (фоллбэк).
+        var diaryPlannedEvents = _eventsByDate.Values.SelectMany(v => v);
+        var doneGlucoseEvents = diaryPlannedEvents.Where(e => e.IsDone && (PlannedEventType)e.EventType == PlannedEventType.Glucose);
+        var doneInsulinEvents = diaryPlannedEvents.Where(e => e.IsDone && (PlannedEventType)e.EventType == PlannedEventType.Insulin);
+        var doneGlucoseIds = EventReconciler.HiddenRecordIds(glucoseAll,
+            g => g.Id, g => g.LinkedEventId, g => g.MeasuredAtUtc, doneGlucoseEvents);
+        var doneInsulinIds = EventReconciler.HiddenRecordIds(insulinAll,
+            i => i.Id, i => i.LinkedEventId, i => i.InjectedAtUtc, doneInsulinEvents);
+
+        // Записи питания, скрытые за выполненным плановым событием (чтобы не было дубля)
+        var doneMealEntryIds = EventReconciler.HiddenMealEntryIds(meals, _eventsByDate.Values.SelectMany(v => v));
+
+        // Real meals — группируем по времени, чтобы один приём пищи = одна строка
+        var mealsByTime = meals
+            .Where(m => !doneMealEntryIds.Contains(m.Id))
+            .GroupBy(m => m.Time)
+            .OrderBy(g => g.Key);
+
+        foreach (var group in mealsByTime)
         {
-            foreach (var ev in doneEvents.Where(e => e.IsDone))
+            var items = group.ToList();
+            double totalKcal = 0;
+            var parts = new List<string>();
+
+            foreach (var m in items)
             {
-                var evLocal = ev.PlannedAtUtc.ToLocalTime();
-                if ((PlannedEventType)ev.EventType == PlannedEventType.Glucose)
-                    glucoseAll
-                        .Where(g => Math.Abs((g.MeasuredAtUtc.ToLocalTime() - evLocal).TotalMinutes) <= 15)
-                        .OrderBy(g => Math.Abs((g.MeasuredAtUtc.ToLocalTime() - evLocal).TotalMinutes))
-                        .Take(1).ToList()
-                        .ForEach(g => doneGlucoseIds.Add(g.Id));
-                else if ((PlannedEventType)ev.EventType == PlannedEventType.Insulin)
-                    insulinAll
-                        .Where(i => Math.Abs((i.InjectedAtUtc.ToLocalTime() - evLocal).TotalMinutes) <= 15)
-                        .OrderBy(i => Math.Abs((i.InjectedAtUtc.ToLocalTime() - evLocal).TotalMinutes))
-                        .Take(1).ToList()
-                        .ForEach(i => doneInsulinIds.Add(i.Id));
+                products.TryGetValue(m.ProductId, out var p);
+                var effG = p is null ? m.Grams : NutritionMath.EffectiveGrams(p.MeasureType, m.Grams, p.PieceWeightG);
+                totalKcal += p is null ? 0 : p.CaloriesPer100g * effG / 100.0;
+                var portion = p?.MeasureType == 1 ? $"{m.Grams:F0} шт" : $"{m.Grams:F0} г";
+                parts.Add($"{p?.Name ?? "Продукт"} {portion}");
             }
-        }
 
-        // Collect meal entry IDs that were created from completing a planned meal event
-        var doneMealEntryIds = meals
-            .Where(m => m.LinkedEventId.HasValue &&
-                        _eventsByDate.Values.SelectMany(v => v)
-                            .Any(ev => ev.Id == m.LinkedEventId.Value && ev.IsDone))
-            .Select(m => m.Id)
-            .ToHashSet();
+            string title, sub;
+            if (items.Count == 1)
+            {
+                products.TryGetValue(items[0].ProductId, out var sp);
+                title = sp?.Name ?? "Продукт";
+                var effG = sp is null ? items[0].Grams : NutritionMath.EffectiveGrams(sp.MeasureType, items[0].Grams, sp.PieceWeightG);
+                var portion = sp?.MeasureType == 1 ? $"{items[0].Grams:F0} шт" : $"{items[0].Grams:F0} г";
+                sub = $"{portion} · {totalKcal:F0} ккал";
+            }
+            else
+            {
+                title = $"Приём пищи · {totalKcal:F0} ккал";
+                sub = string.Join(" · ", parts);
+            }
 
-        // Real meals (skip entries linked to a done planned meal event)
-        foreach (var m in meals.Where(m => !doneMealEntryIds.Contains(m.Id)))
-        {
-            products.TryGetValue(m.ProductId, out var p);
             _diaryItems.Add(new DiaryItem(
-                _selected.ToDateTime(m.Time), "🍽",
-                p?.Name ?? "Продукт",
-                $"{m.Grams:F0} г · {(p is null ? 0 : p.CaloriesPer100g * m.Grams / 100):F0} ккал",
-                false, false, null, -1, null));
+                _selected.ToDateTime(group.Key), "🍽",
+                title, sub, false, true, null, -1, null));
         }
 
         // Real glucose (skip records already shown via done planned events)
@@ -341,30 +409,44 @@
             _diaryItems.Add(new DiaryItem(
                 g.MeasuredAtUtc.ToLocalTime(), "📈",
                 $"{g.ValueMmol:F1} ммоль/л", null,
-                false, false, null, -1, null));
+                false, true, null, -1, null));
 
         // Real insulin (skip records already shown via done planned events)
         foreach (var ins in insulinAll.Where(i => !doneInsulinIds.Contains(i.Id)))
+        {
+            var isBolus = (GlucoTrack.Shared.Entities.InsulinType)ins.InsulinType == GlucoTrack.Shared.Entities.InsulinType.Bolus;
             _diaryItems.Add(new DiaryItem(
-                ins.InjectedAtUtc.ToLocalTime(), "💊",
-                $"Инсулин {ins.Units:F1} ЕД", null,
-                false, false, null, -1, null));
+                ins.InjectedAtUtc.ToLocalTime(),
+                isBolus ? "💉" : "🩺",
+                isBolus ? $"Болюс {ins.Units:F1} ЕД" : $"Базал {ins.Units:F1} ЕД",
+                null, false, true, null, -1, null));
+        }
 
-        // High-glucose alert: latest glucose today > target, no bolus in last 2h
+        // High-glucose alert — решение вынесено в тестируемый GlucoseAlertDecider.
         _alertGlucose = null;
+        _pendingBolusTime = null;
+        _criticalGlucose = null;
         if (_selected == DateOnly.FromDateTime(DateTime.Today) && glucoseAll.Count > 0)
         {
             var settings = (await Db.GetAllAsync<UserSettingsDto>("settings")).FirstOrDefault();
             double target = settings?.TargetGlucoseHigh ?? 10.0;
             var latest = glucoseAll.OrderByDescending(g => g.MeasuredAtUtc).First();
-            if (latest.ValueMmol > target)
+            // Pass latest glucose to PlanModal for dynamic pre-bolus timing (only if recent ≤2h)
+            if ((DateTime.UtcNow - latest.MeasuredAtUtc).TotalHours <= 2)
+                _lastGlucose = latest.ValueMmol;
+            var allEvents = _eventsByDate.Values.SelectMany(v => v);
+            var alert = GlucoseAlertDecider.Decide(latest.ValueMmol, target, insulinAll, allEvents, DateTime.UtcNow);
+            switch (alert.Kind)
             {
-                var now = DateTime.UtcNow;
-                var recentBolus = insulinAll.Any(i =>
-                    (GlucoTrack.Shared.Entities.InsulinType)i.InsulinType == GlucoTrack.Shared.Entities.InsulinType.Bolus &&
-                    (now - i.InjectedAtUtc).TotalHours <= 2);
-                if (!recentBolus)
-                    _alertGlucose = latest.ValueMmol;
+                case GlucoseAlertKind.Critical:
+                    _criticalGlucose = alert.Glucose;
+                    break;
+                case GlucoseAlertKind.PendingBolus:
+                    _pendingBolusTime = TimeOnly.FromDateTime(alert.PendingBolusUtc!.Value.ToLocalTime());
+                    break;
+                case GlucoseAlertKind.Correction:
+                    _alertGlucose = alert.Glucose;
+                    break;
             }
         }
     }
@@ -407,7 +489,9 @@
             await Db.PutAsync("planned_events",
                 ev with { IsDone = true, UpdatedAtUtc = DateTime.UtcNow },
                 pending: false);
-        await LoadDiaryAsync();
+        // Reload full data (not just the diary): the dedup that hides a real meal entry
+        // behind its done planned event relies on _eventsByDate, which is rebuilt here.
+        await LoadDataAsync();
         StateHasChanged();
     }
 
@@ -434,7 +518,7 @@
             {
                 if (products.TryGetValue(item.ProductId, out var prod))
                 {
-                    var grams = prod.MeasureType == 1 ? item.Grams * (prod.PieceWeightG ?? 100) : item.Grams;
+                    var grams = NutritionMath.EffectiveGrams(prod.MeasureType, item.Grams, prod.PieceWeightG);
                     totalCarbs += prod.CarbsPer100g * grams / 100.0;
                 }
             }
@@ -494,8 +578,8 @@
     private void CloseModal() { _editEvent = null; _modalOpen = false; }
     private async Task OnEventSaved() { _editEvent = null; _modalOpen = false; await LoadDataAsync(); }
 
-    private void GoToInsulinAlert() =>
-        Nav.NavigateTo($"/insulin?alert=1&glucose={_alertGlucose!.Value.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)}");
+    private void GoToInsulinAlert(double glucose) =>
+        Nav.NavigateTo($"/insulin?alert=1&glucose={glucose.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)}");
 
     private void OpenEditModal(Guid eventId)
     {
