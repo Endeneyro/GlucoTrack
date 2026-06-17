@@ -343,6 +343,11 @@
                     var mealSub = string.Join(", ", ev.MealItems.Select(m => m.ProductName));
                     sub = string.IsNullOrEmpty(sub) ? mealSub : $"{sub} · {mealSub}";
                 }
+                if (type == PlannedEventType.Insulin && ev.InsulinSubtype.HasValue)
+                {
+                    var subLabel = ev.InsulinSubtype == 0 ? "короткий (болюс)" : "длительный (базал)";
+                    sub = string.IsNullOrEmpty(sub) ? subLabel : $"{subLabel} · {sub}";
+                }
 
                 _diaryItems.Add(new DiaryItem(
                     ev.PlannedAtUtc.ToLocalTime(), PlannedEventMeta.Icon(type),

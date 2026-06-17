@@ -4,44 +4,96 @@
 @inject NavigationManager Nav
 @inject ConnectivityService Connectivity
 @inject SyncService Sync
+@inject DbService Db
 
 <div class="app-shell">
     <nav class="sidebar">
-        <div class="sidebar-header">
-            <span class="logo-icon">🍏</span>
-            <span class="logo-text">GlucoTrack</span>
-        </div>
-        <ul class="nav-menu">
-            <li><NavLink href="/" Match="NavLinkMatch.All"><span class="nav-icon">🏠</span> Главная</NavLink></li>
-            <li><NavLink href="/calendar"><span class="nav-icon">📅</span> Календарь</NavLink></li>
-            <li><NavLink href="/meals"><span class="nav-icon">🥗</span> Питание</NavLink></li>
-            <li><NavLink href="/products"><span class="nav-icon">🛒</span> Продукты</NavLink></li>
-            <li><NavLink href="/glucose"><span class="nav-icon">📈</span> Глюкоза</NavLink></li>
-            <li><NavLink href="/insulin"><span class="nav-icon">💊</span> Инсулин</NavLink></li>
-            <li><NavLink href="/bolus"><span class="nav-icon">🧮</span> Болюс</NavLink></li>
-            <li><NavLink href="/analysis"><span class="nav-icon">📊</span> Аналитика</NavLink></li>
-            <li><NavLink href="/settings"><span class="nav-icon">⚙️</span> Настройки</NavLink></li>
-        </ul>
-        <div class="sidebar-footer">
-            <div class="sync-status @(Connectivity.IsOnline ? "online" : "offline")">
-                @if (Sync.IsSyncing)
-                {
-                    <span>⟳ Синхронизация...</span>
-                }
-                else if (!Connectivity.IsOnline)
-                {
-                    <span>📵 Офлайн@(Sync.PendingCount > 0 ? $" · {Sync.PendingCount} ожид." : "")</span>
-                }
-                else if (Sync.PendingCount > 0)
-                {
-                    <span class="clickable" @onclick="ManualSyncAsync">↑ @Sync.PendingCount не синхр.</span>
-                }
-                else if (Sync.LastSyncUtc.HasValue)
-                {
-                    <span>✓ Синхронизировано</span>
-                }
+        <div class="sidebar-inner">
+            <svg class="sidebar-wave" viewBox="0 0 240 160" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <linearGradient id="sw1" x1="0%" y1="0%" x2="100%" y2="0%">
+                            <stop offset="0%" stop-color="#dce9fe" />
+                        <stop offset="100%" stop-color="#d4e5fb" />
+                        </linearGradient>
+                        <linearGradient id="sw2" x1="0%" y1="0%" x2="100%" y2="0%">
+                            <stop offset="0%" stop-color="#d4e5fb" />
+                            <stop offset="100%" stop-color="#d4e5fb" />
+                        </linearGradient>
+                    </defs>
+                <path d="M0,88 C40,30 80,35 120,48 C160,60 200,55 240,-2 L240,160 L0,160 Z" fill="#e3ecfc">
+                        <animate attributeName="d"
+                            values="M0,0 C40,0 80,0 120,0 C160,0 200,0 240,0 L240,160 L0,160 Z;
+                                    M0,60 C40,-55 80,-45 120,-10 C160,20 200,5 240,-85 L240,160 L0,160 Z;
+                                    M0,88 C40,80 80,55 120,58 C160,10 200,55 240,-2 L240,160 L0,160 Z"
+                            keyTimes="0;0.45;1" dur="1.2s" begin=".3s" fill="freeze"
+                            calcMode="spline" keySplines="0.4 0 1 1; 0 0 0.3 1" />
+                    </path>
+                    <path d="M0,105 C40,58 80,55 120,55 C160,55 200,52 240,18 L240,160 L0,160 Z" fill="url(#sw1)">
+                        <animate attributeName="d"
+                            values="M0,0 C40,0 80,0 120,0 C160,0 200,0 240,0 L240,160 L0,160 Z;
+                                    M0,75 C40,-55 80,-40 120,-38 C160,-38 200,-45 240,-85 L240,160 L0,160 Z;
+                                    M0,105 C40,58 80,55 120,55 C160,55 200,52 240,18 L240,160 L0,160 Z"
+                            keyTimes="0;0.45;1" dur="1.2s" begin=".45s" fill="freeze"
+                            calcMode="spline" keySplines="0.4 0 1 1; 0 0 0.3 1" />
+                    </path>
+                    <path d="M0,120 C60,105 140,118 190,110 C210,107 228,100 240,95 L240,160 L0,160 Z" fill="url(#sw2)">
+                        <animate attributeName="d"
+                            values="M0,0 C60,0 140,0 190,0 C210,0 228,0 240,0 L240,160 L0,160 Z;
+                                    M0,82 C60,55 140,72 190,58 C210,48 228,32 240,22 L240,160 L0,160 Z;
+                                    M0,120 C60,105 140,118 190,110 C210,107 228,100 240,95 L240,160 L0,160 Z"
+                            keyTimes="0;0.45;1" dur="1.2s" begin=".6s" fill="freeze"
+                            calcMode="spline" keySplines="0.4 0 1 1; 0 0 0.3 1" />
+                    </path>
+                </svg>
+            <div class="sidebar-header">
+                <img src="logo.png" alt="VitaTrack" class="sidebar-logo-icon" />
+                <span class="logo-text">VitaTrack</span>
             </div>
-            <button class="btn-logout" @onclick="LogoutAsync">Выйти</button>
+            <ul class="nav-menu">
+                <li><NavLink href="/" Match="NavLinkMatch.All"><img class="nav-icon" src="icons/home.svg" alt="" /> Главная</NavLink></li>
+                <li><NavLink href="/calendar"><img class="nav-icon" src="icons/calendar.svg" alt="" /> Календарь</NavLink></li>
+                <li><NavLink href="/meals"><img class="nav-icon" src="icons/meals.svg" alt="" /> Питание</NavLink></li>
+                <li><NavLink href="/products"><img class="nav-icon" src="icons/products.svg" alt="" /> Продукты</NavLink></li>
+                <li><NavLink href="/glucose"><img class="nav-icon" src="icons/glucose.svg" alt="" /> Глюкоза</NavLink></li>
+                <li><NavLink href="/insulin"><img class="nav-icon" src="icons/insulin.svg" alt="" /> Инсулин</NavLink></li>
+                <li><NavLink href="/bolus"><img class="nav-icon" src="icons/bolus.svg" alt="" /> Болюс</NavLink></li>
+                <li><NavLink href="/analysis"><img class="nav-icon" src="icons/analysis.svg" alt="" /> Аналитика</NavLink></li>
+                <li><NavLink href="/profile"><img class="nav-icon" src="icons/profile.svg" alt="" /> Профиль</NavLink></li>
+                <li><NavLink href="/settings"><img class="nav-icon" src="icons/settings.svg" alt="" /> Настройки</NavLink></li>
+            </ul>
+            <div class="sidebar-footer">
+                <div class="sync-info">
+                    @if (Sync.IsSyncing)
+                    {
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="spin"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                        <span style="color:#3B82F6">Синхронизация...</span>
+                    }
+                    else if (!Connectivity.IsOnline)
+                    {
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.56 9"/><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+                        <span style="color:#F59E0B">Офлайн@(Sync.PendingCount > 0 ? $" · {Sync.PendingCount} ожид." : "")</span>
+                    }
+                    else if (Sync.PendingCount > 0)
+                    {
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                        <span class="clickable" style="color:#3B82F6" @onclick="ManualSyncAsync">↑ @Sync.PendingCount не синхр.</span>
+                    }
+                    else if (Sync.LastSyncUtc.HasValue)
+                    {
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                        <div>
+                            <div style="color:#10B981;font-size:.72rem">Синхронизировано</div>
+                            <div style="color:#A0AEC0;font-size:.68rem">@Sync.LastSyncUtc.Value.ToLocalTime().ToString("dd.MM.yyyy, HH:mm")</div>
+                        </div>
+                    }
+                    else
+                    {
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#A0AEC0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                        <span style="color:#A0AEC0">Онлайн</span>
+                    }
+                </div>
+                <button class="btn-logout" @onclick="LogoutAsync">Выйти</button>
+            </div>
         </div>
     </nav>
 
@@ -71,8 +123,9 @@
 
     private async Task LogoutAsync()
     {
+        await Db.ClearAllAsync();
         await Auth.LogoutAsync();
         AuthState.NotifyAuthChanged();
-        Nav.NavigateTo("/login");
+        Nav.NavigateTo("/login", forceLoad: true);
     }
 }

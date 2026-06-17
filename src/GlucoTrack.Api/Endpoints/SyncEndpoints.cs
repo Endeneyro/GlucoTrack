@@ -36,7 +36,7 @@ public static class SyncEndpoints
         var insulin = await db.InsulinInjections.IgnoreQueryFilters()
             .Where(e => e.UserId == userId && e.UpdatedAtUtc > sinceTime)
             .Select(e => new InsulinInjectionDto(e.Id, e.InjectedAtUtc, e.Units,
-                (int)e.InsulinType, e.Carbs, e.GlucoseBefore, e.UpdatedAtUtc, e.IsDeleted, e.LinkedEventId))
+                (int)e.InsulinType, e.Carbs, e.GlucoseBefore, e.UpdatedAtUtc, e.IsDeleted, e.LinkedEventId, e.ExtendedDurationHours))
             .ToListAsync();
 
         // Pull ALL own + base products (non-incremental). Products are a small reference
@@ -194,7 +194,8 @@ public static class SyncEndpoints
                     Units = dto.Units, InsulinType = (InsulinType)dto.InsulinType,
                     Carbs = dto.Carbs, GlucoseBefore = dto.GlucoseBefore,
                     UpdatedAtUtc = dto.UpdatedAtUtc, IsDeleted = dto.IsDeleted,
-                    LinkedEventId = dto.LinkedEventId
+                    LinkedEventId = dto.LinkedEventId,
+                    ExtendedDurationHours = dto.ExtendedDurationHours
                 });
                 count++;
             }
@@ -204,6 +205,7 @@ public static class SyncEndpoints
                 row.InsulinType = (InsulinType)dto.InsulinType; row.Carbs = dto.Carbs;
                 row.GlucoseBefore = dto.GlucoseBefore; row.UpdatedAtUtc = dto.UpdatedAtUtc;
                 row.IsDeleted = dto.IsDeleted; row.LinkedEventId = dto.LinkedEventId;
+                row.ExtendedDurationHours = dto.ExtendedDurationHours;
                 count++;
             }
             else conflicts.Add(dto.Id);

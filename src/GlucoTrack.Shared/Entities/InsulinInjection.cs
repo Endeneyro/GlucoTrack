@@ -10,4 +10,5 @@ public class InsulinInjection : EntityBase
     public double? Carbs { get; set; }
     public double? GlucoseBefore { get; set; }
     public Guid? LinkedEventId { get; set; }
+    public double? ExtendedDurationHours { get; set; }
 }

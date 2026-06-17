@@ -3,8 +3,8 @@
 // deserializes with case-insensitive matching.
 window.glucoDb = (function () {
     const DB_NAME = 'glucotrack_v1';
-    const DB_VERSION = 2;
-    const STORES = ['meals', 'glucose', 'insulin', 'products', 'therapy', 'settings', 'planned_events'];
+    const DB_VERSION = 5;
+    const STORES = ['meals', 'glucose', 'insulin', 'products', 'therapy', 'settings', 'planned_events', 'profile', 'user_insulins', 'meal_templates', 'modules'];
 
     let _db = null;
 
@@ -118,6 +118,20 @@ window.glucoDb = (function () {
 
         isOnline: function () {
             return navigator.onLine;
+        },
+
+        // Clear all stores and reset sync cursor (called on logout)
+        clearAll: async function () {
+            const db = await open();
+            return new Promise((resolve, reject) => {
+                const t = db.transaction(STORES, 'readwrite');
+                t.oncomplete = () => {
+                    localStorage.removeItem('glucotrack_last_sync');
+                    resolve();
+                };
+                t.onerror = e => reject(e.target.error);
+                STORES.forEach(name => t.objectStore(name).clear());
+            });
         }
     };
 })();

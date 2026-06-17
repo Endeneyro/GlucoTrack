@@ -59,4 +59,7 @@ public class DbService
 
     public async Task<bool> IsOnlineAsync()
         => await _js.InvokeAsync<bool>("glucoDb.isOnline");
+
+    public async Task ClearAllAsync()
+        => await _js.InvokeVoidAsync("glucoDb.clearAll");
 }

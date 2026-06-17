@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using GlucoTrack.Api.Data;
 using GlucoTrack.Api.Services;
 using GlucoTrack.Shared.DTOs.Auth;
@@ -16,6 +17,7 @@ public static class AuthEndpoints
         group.MapPost("/register", Register);
         group.MapPost("/login", Login);
         group.MapPost("/refresh", Refresh);
+        group.MapPost("/change-password", ChangePassword).RequireAuthorization();
     }
 
     private static async Task<IResult> Register(
@@ -79,5 +81,22 @@ public static class AuthEndpoints
 
         var tokens = await tokenService.CreateTokensAsync(user);
         return Results.Ok(tokens);
+    }
+
+    private static async Task<IResult> ChangePassword(
+        ChangePasswordRequest req,
+        ClaimsPrincipal principal,
+        UserManager<AppUser> userManager)
+    {
+        var userId = principal.FindFirstValue(ClaimTypes.NameIdentifier);
+        var user = await userManager.FindByIdAsync(userId!);
+        if (user is null)
+            return Results.Problem("Пользователь не найден.", statusCode: 404);
+
+        var result = await userManager.ChangePasswordAsync(user, req.CurrentPassword, req.NewPassword);
+        if (!result.Succeeded)
+            return Results.ValidationProblem(result.Errors.ToDictionary(e => e.Code, e => new[] { e.Description }));
+
+        return Results.Ok();
     }
 }

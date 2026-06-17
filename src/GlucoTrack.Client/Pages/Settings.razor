@@ -1,9 +1,8 @@
 @page "/settings"
 @attribute [Authorize]
-@using GlucoTrack.Shared.DTOs.Sync
-@inject DbService Db
-@inject SyncService Sync
-@inject NavigationManager Nav
+@using System.Net.Http.Json
+@using GlucoTrack.Shared.DTOs.Auth
+@inject HttpClient Http
 
 <PageTitle>Настройки — GlucoTrack</PageTitle>
 
@@ -12,34 +11,171 @@
         <h2 style="margin:0;font-size:1.25rem;font-weight:700">Настройки</h2>
     </div>
 
+    <!-- ── Смена пароля ─────────────────────────────────────────── -->
     <div class="home-card" style="margin-bottom:1rem">
-        <div class="home-card-title">Профиль и параметры лечения</div>
-        <p style="font-size:.875rem;color:var(--c-text-muted);margin-bottom:1rem">
-            Личные данные, инсулины, цели питания и глюкозы, коэффициенты IC/ISF — всё в одном месте.
-        </p>
-        <button class="btn btn-primary" @onclick='() => Nav.NavigateTo("/profile")'>
-            Перейти в профиль
-        </button>
+        <div class="home-card-title">Смена пароля</div>
+        <div style="display:flex;flex-direction:column;gap:.75rem;margin-top:.75rem">
+            <div class="form-group">
+                <label>Текущий пароль</label>
+                <input class="form-control" type="password" @bind="_currentPassword" placeholder="••••••••" />
+            </div>
+            <div class="form-group">
+                <label>Новый пароль</label>
+                <input class="form-control" type="password" @bind="_newPassword" placeholder="••••••••" />
+            </div>
+            <div class="form-group">
+                <label>Подтверждение нового пароля</label>
+                <input class="form-control" type="password" @bind="_confirmPassword" placeholder="••••••••" />
+            </div>
+            @if (_pwError is not null)
+            {
+                <div style="color:var(--c-danger);font-size:.8rem">@_pwError</div>
+            }
+            @if (_pwSuccess)
+            {
+                <div style="color:#10B981;font-size:.8rem">Пароль успешно изменён.</div>
+            }
+            <button class="btn btn-primary" style="align-self:flex-start" @onclick="ChangePasswordAsync" disabled="@_pwLoading">
+                @(_pwLoading ? "Сохранение..." : "Изменить пароль")
+            </button>
+        </div>
     </div>
 
-    @if (_loading) { <p style="color:var(--c-text-muted)">Загрузка...</p> }
-    else
-    {
-        <div class="home-card" style="margin-bottom:1rem">
-            <div class="home-card-title">Аккаунт</div>
-            <div style="font-size:.875rem;color:var(--c-text-muted)">
-                Для смены пароля или удаления аккаунта обратитесь к администратору.
-            </div>
-        </div>
-    }
+    <!-- ── Создание инвайта ──────────────────────────────────────── -->
+    <div class="home-card" style="margin-bottom:1rem">
+        <div class="home-card-title">Инвайт-коды</div>
+        <p style="font-size:.875rem;color:var(--c-text-muted);margin-bottom:.75rem">
+            Сгенерируйте код приглашения для регистрации нового пользователя.
+        </p>
+        <button class="btn btn-primary" @onclick="CreateInviteAsync" disabled="@_inviteLoading">
+            @(_inviteLoading ? "Создание..." : "Создать инвайт")
+        </button>
+
+        @if (_invites.Count > 0)
+        {
+            <table style="width:100%;border-collapse:collapse;margin-top:1rem;font-size:.8rem">
+                <thead>
+                    <tr style="color:var(--c-text-muted);border-bottom:1px solid var(--c-border)">
+                        <th style="text-align:left;padding:.4rem .5rem">Код</th>
+                        <th style="text-align:left;padding:.4rem .5rem">Создан</th>
+                        <th style="text-align:left;padding:.4rem .5rem">Статус</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var inv in _invites)
+                    {
+                        <tr style="border-bottom:1px solid var(--c-border)">
+                            <td style="padding:.4rem .5rem;font-family:monospace">@inv.Code</td>
+                            <td style="padding:.4rem .5rem;color:var(--c-text-muted)">@inv.CreatedAtUtc.ToLocalTime().ToString("dd.MM.yy HH:mm")</td>
+                            <td style="padding:.4rem .5rem;color:@(inv.UsedAtUtc.HasValue ? "var(--c-text-muted)" : "#10B981")">
+                                @(inv.UsedAtUtc.HasValue ? "Использован" : "Активен")
+                            </td>
+                            <td style="padding:.4rem .5rem;text-align:right">
+                                @if (!inv.UsedAtUtc.HasValue)
+                                {
+                                    <button style="background:none;border:none;cursor:pointer;color:var(--c-danger);font-size:.8rem;padding:0"
+                                            @onclick="() => DeleteInviteAsync(inv.Code)">
+                                        Удалить
+                                    </button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
 </div>
 
 @code {
-    private bool _loading = true;
+    // ── Смена пароля ────────────────────────────────────────────────
+    private string _currentPassword = "";
+    private string _newPassword = "";
+    private string _confirmPassword = "";
+    private bool _pwLoading;
+    private bool _pwSuccess;
+    private string? _pwError;
+
+    private async Task ChangePasswordAsync()
+    {
+        _pwError = null;
+        _pwSuccess = false;
+
+        if (string.IsNullOrWhiteSpace(_currentPassword) || string.IsNullOrWhiteSpace(_newPassword))
+        {
+            _pwError = "Заполните все поля.";
+            return;
+        }
+        if (_newPassword != _confirmPassword)
+        {
+            _pwError = "Новый пароль и подтверждение не совпадают.";
+            return;
+        }
+        if (_newPassword.Length < 8)
+        {
+            _pwError = "Новый пароль должен содержать минимум 8 символов.";
+            return;
+        }
+
+        _pwLoading = true;
+        try
+        {
+            var resp = await Http.PostAsJsonAsync("/api/auth/change-password",
+                new ChangePasswordRequest(_currentPassword, _newPassword));
+
+            if (resp.IsSuccessStatusCode)
+            {
+                _pwSuccess = true;
+                _currentPassword = _newPassword = _confirmPassword = "";
+            }
+            else
+            {
+                _pwError = "Не удалось изменить пароль. Проверьте текущий пароль.";
+            }
+        }
+        finally
+        {
+            _pwLoading = false;
+        }
+    }
+
+    // ── Инвайты ─────────────────────────────────────────────────────
+    private bool _inviteLoading;
+    private List<InviteRow> _invites = [];
 
     protected override async Task OnInitializedAsync()
     {
-        await Task.CompletedTask;
-        _loading = false;
+        await LoadInvitesAsync();
     }
+
+    private async Task LoadInvitesAsync()
+    {
+        var result = await Http.GetFromJsonAsync<List<InviteRow>>("/api/invites");
+        _invites = result ?? [];
+    }
+
+    private async Task CreateInviteAsync()
+    {
+        _inviteLoading = true;
+        try
+        {
+            var resp = await Http.PostAsync("/api/invites", null);
+            if (resp.IsSuccessStatusCode)
+                await LoadInvitesAsync();
+        }
+        finally
+        {
+            _inviteLoading = false;
+        }
+    }
+
+    private async Task DeleteInviteAsync(string code)
+    {
+        var resp = await Http.DeleteAsync($"/api/invites/{code}");
+        if (resp.IsSuccessStatusCode)
+            await LoadInvitesAsync();
+    }
+
+    private record InviteRow(string Code, DateTime CreatedAtUtc, DateTime? UsedAtUtc);
 }

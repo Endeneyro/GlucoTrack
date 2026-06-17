@@ -160,6 +160,9 @@ namespace GlucoTrack.Api.Migrations
                     b.Property<double?>("Carbs")
                         .HasColumnType("double precision");
 
+                    b.Property<double?>("ExtendedDurationHours")
+                        .HasColumnType("double precision");
+
                     b.Property<double?>("GlucoseBefore")
                         .HasColumnType("double precision");
 

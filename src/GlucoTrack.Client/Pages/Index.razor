@@ -5,15 +5,18 @@
 @using GlucoTrack.Shared.Calculations
 @using GlucoTrack.Shared.Events
 @using Microsoft.AspNetCore.Components.Authorization
+@using GlucoTrack.Shared.Entities
 @inject DbService Db
 @inject AuthenticationStateProvider AuthProvider
+@implements IDisposable
 
 <PageTitle>Главная — GlucoTrack</PageTitle>
 
 <style>
     /* ── Layout grids ── */
-    .dash-row-3 { display: grid !important; grid-template-columns: repeat(3,1fr) !important; gap: 1rem; margin-bottom: 1rem; }
-    .dash-row-2 { display: grid !important; grid-template-columns: 1fr 1fr !important; gap: 1rem; margin-bottom: 1rem; }
+    .dash-rows  { display: flex; flex-direction: column; gap: 1rem; }
+    .dash-row-3 { display: grid !important; grid-template-columns: repeat(3,1fr) !important; gap: 1rem; }
+    .dash-row-2 { display: grid !important; grid-template-columns: 1fr 1fr !important; gap: 1rem; }
     .dash-row-4 { display: grid !important; grid-template-columns: repeat(4,1fr) !important; gap: 1rem; }
     @@media (max-width: 860px) { .dash-row-3,.dash-row-2,.dash-row-4 { grid-template-columns:1fr !important; } }
 
@@ -24,14 +27,25 @@
 
     /* ── Header ── */
     .dash-header { margin-bottom:1.25rem; }
-    .dash-greeting { font-size:1.75rem; font-weight:800; color:#1A2B4A; margin:0 0 .2rem; }
-    .dash-subdate { font-size:.875rem; color:#6B7FA3; margin:0; }
+    .dash-greeting { font-size:1.3rem; font-weight:600; color:#1A2B4A; margin:0 0 .2rem; }
+    .dash-subdate { font-size:.8rem; font-weight:600; color:#6B7FA3; margin:0; }
     .dash-date-pill { display:none; }
 
     /* ── Calories ring ── */
     .circle-progress-wrap { display:flex; gap:1rem; align-items:center; }
     .circle-svg { width:90px; height:90px; display:block; flex-shrink:0; }
     .circle-label { font-size:.68rem; text-align:center; color:#6B7FA3; margin-top:.2rem; }
+    /* ── Calories card layout ── */
+    .cal-block { display:flex !important; flex-direction:row !important; align-items:center !important; gap:.75rem !important; }
+    .cal-block-left { flex:1 !important; min-width:0 !important; }
+    .cal-main-number { font-size:1.75rem !important; font-weight:800 !important; color:#3B82F6 !important; line-height:1.15 !important; }
+    .cal-target { font-size:.9rem !important; font-weight:500 !important; color:#6B7FA3 !important; }
+    .cal-bar-wrap { margin:.5rem 0 .35rem !important; }
+    .cal-bar-track { height:5px !important; background:#E4EAFB !important; border-radius:99px !important; overflow:hidden !important; }
+    .cal-bar-fill { height:100% !important; border-radius:99px !important; transition:width .4s !important; }
+    .cal-left-text { font-size:.78rem !important; color:#6B7FA3 !important; }
+    .cal-ring-wrap { flex:0 0 auto !important; display:flex !important; align-items:center !important; justify-content:center !important; }
+    .cal-card-title { text-transform:uppercase !important; font-size:.82rem !important; font-weight:600 !important; letter-spacing:.05em !important; }
 
     /* ── Macro bars ── */
     .macro-bars { display:flex; flex-direction:column; gap:.6rem; }
@@ -95,40 +109,54 @@ else
     <div class="dash-header">
         <div>
             <h1 class="dash-greeting">@_greeting, @_userName!</h1>
-            <p class="dash-subdate">@DateTime.Today.ToString("dddd, d MMMM yyyy", _ru)</p>
+            <p class="dash-subdate">Сегодня, @DateTime.Today.ToString("dddd, d MMMM", _ru)</p>
         </div>
     </div>
 
-    <!-- Row 1: Calories · БЖУ · Глюкоза -->
-    <div class="dash-row-3">
+    <div class="dash-rows">
+
+    <!-- Row 1: Calories · БЖУ · Глюкоза · Инсулин на борту -->
+    <div class="dash-row-4">
 
         <!-- Калории -->
         <div class="home-card">
-            <div class="home-card-title">Калории <a href="/meals">Подробнее ›</a></div>
-            <div class="circle-progress-wrap">
-                @{
-                    double calPct = _targetCal > 0 ? Math.Min(100, _todayCal / _targetCal * 100) : 0;
-                    const double r = 50; double circ = 2 * Math.PI * r;
-                    double offset = circ * (1 - calPct / 100.0);
-                }
-                <svg class="circle-svg" viewBox="0 0 120 120">
-                    <circle cx="60" cy="60" r="@r.ToString(_inv)" fill="none" stroke="#E4EAFB" stroke-width="12"/>
-                    <circle cx="60" cy="60" r="@r.ToString(_inv)" fill="none"
-                            stroke="@(calPct > 100 ? "#EF4444" : "#3B82F6")"
-                            stroke-width="12"
-                            stroke-dasharray="@circ.ToString("F1", _inv)"
-                            stroke-dashoffset="@offset.ToString("F1", _inv)"
-                            stroke-linecap="round"
-                            transform="rotate(-90 60 60)"/>
-                    <text x="60" y="56" text-anchor="middle" font-size="18" font-weight="bold" fill="#1A2B4A" font-family="sans-serif">@_todayCal.ToString("F0")</text>
-                    <text x="60" y="70" text-anchor="middle" font-size="8" fill="#6B7FA3" font-family="sans-serif">ккал</text>
-                </svg>
-                <div style="flex:1;min-width:0">
-                    <div style="font-size:.78rem;color:#6B7FA3;margin-bottom:.15rem">Цель: @_targetCal.ToString("F0") ккал</div>
-                    <div style="font-size:1.5rem;font-weight:800;color:#3B82F6;line-height:1.1">@_todayCal.ToString("F0")</div>
-                    <div style="font-size:.75rem;color:#6B7FA3">съедено</div>
-                    <div style="margin-top:.6rem;font-size:.8rem;color:#6B7FA3">Осталось <b style="color:#1A2B4A">@(Math.Max(0, _targetCal - _todayCal).ToString("F0")) ккал</b></div>
-                    <div style="font-size:.8rem;color:#6B7FA3">ХЕ <b style="color:#1A2B4A">@XeCalculator.CarbsToXe(_todayCarbs, _xeGrams).ToString("F1")</b></div>
+            <div class="home-card-title cal-card-title" style="text-transform:none;font-size:.82rem;font-weight:600;letter-spacing:0">
+                Калории <a href="/meals" style="font-size:.78rem;font-weight:500;color:#3B82F6;text-decoration:none">Подробнее ›</a>
+            </div>
+            @{
+                double calPct = _targetCal > 0 ? Math.Min(100, _todayCal / _targetCal * 100) : 0;
+                double calLeft = Math.Max(0, _targetCal - _todayCal);
+                string calBarColor = calPct >= 100 ? "#EF4444" : "#3B82F6";
+            }
+            <div class="cal-block">
+                <div class="cal-block-left">
+                    <div class="cal-main-number">
+                        @_todayCal.ToString("F0") <span class="cal-target">/ @_targetCal.ToString("F0") ккал</span>
+                    </div>
+                    <div class="cal-bar-wrap">
+                        <div class="cal-bar-track">
+                            <div class="cal-bar-fill" style="width:@calPct.ToString("F1", _inv)%;background:@calBarColor"></div>
+                        </div>
+                    </div>
+                    <div class="cal-left-text">Осталось @calLeft.ToString("F0") ккал</div>
+                </div>
+                <div class="cal-ring-wrap">
+                    @{
+                        const double cr = 30; double ccirc = 2 * Math.PI * cr;
+                        double coffset = ccirc * (1 - calPct / 100.0);
+                    }
+                    <svg viewBox="0 0 80 80" width="152" height="152" style="display:block">
+                        <circle cx="40" cy="40" r="@cr.ToString(_inv)" fill="#EEF2FF" stroke="none"/>
+                        <circle cx="40" cy="40" r="@cr.ToString(_inv)" fill="none" stroke="#E4EAFB" stroke-width="6"/>
+                        <circle cx="40" cy="40" r="@cr.ToString(_inv)" fill="none"
+                                stroke="@calBarColor"
+                                stroke-width="6"
+                                stroke-dasharray="@ccirc.ToString("F1", _inv)"
+                                stroke-dashoffset="@coffset.ToString("F1", _inv)"
+                                stroke-linecap="round"
+                                transform="rotate(-90 40 40)"/>
+                        <image href="icons/fire.svg" x="18" y="18" width="44" height="44"/>
+                    </svg>
                 </div>
             </div>
         </div>
@@ -168,6 +196,27 @@ else
                     </svg>
                     <div style="font-size:.875rem">Нет замеров сегодня</div>
                     <a href="/glucose" style="color:#3B82F6;font-size:.85rem;margin-top:.5rem;display:inline-block">Добавить →</a>
+                </div>
+            }
+        </div>
+
+        <!-- Активный инсулин (IOB) -->
+        <div class="home-card">
+            <div class="home-card-title">Инсулин на борту <a href="/bolus">Болюс ›</a></div>
+            @if (_iob > 0)
+            {
+                <div style="text-align:center;padding:.5rem 0">
+                    <div style="font-size:2.5rem;font-weight:800;color:#3B82F6;line-height:1.1">@_iob.ToString("F1")</div>
+                    <div style="font-size:.8rem;color:var(--c-text-muted)">ЕД · IOB</div>
+                </div>
+            }
+            else
+            {
+                <div style="text-align:center;padding:1.5rem 0;color:#6B7FA3">
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#A0AEC0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin:0 auto .75rem;display:block">
+                        <path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2v-4M9 21H5a2 2 0 0 1-2-2v-4m0 0h18"/>
+                    </svg>
+                    <div style="font-size:.875rem">Нет активного инсулина</div>
                 </div>
             }
         </div>
@@ -247,8 +296,10 @@ else
         </div>
     </div>
 
-    <!-- Row 3: Динамика за неделю -->
-    <div class="home-card" style="margin-bottom:1rem">
+    </div> @* /dash-rows *@
+
+    @* Динамика за неделю — временно скрыта (графики в разработке)
+    <div class="home-card">
         <div class="home-card-title">
             Динамика за неделю
             <span style="font-size:.78rem;font-weight:400;color:var(--c-text-muted)">последние 7 дней</span>
@@ -260,6 +311,7 @@ else
             @SparkCard("Углеводы (ср.)",_weeklyCarbs,  "г",    "var(--c-success)")
         </div>
     </div>
+    *@
 }
 
 @code {
@@ -272,9 +324,12 @@ else
 
     private double _targetCal = 2000, _targetProt = 80, _targetFat = 67, _targetCarbs = 250;
     private double _gLow = 3.9, _gHigh = 10.0;
-    private double _xeGrams = 12;
+    private double _xeGrams = 12, _diaHours = 4.0;
     private double _todayCal, _todayProt, _todayFat, _todayCarbs;
     private List<GlucoseReadingDto> _todayGlucose = [];
+    private List<InsulinInjectionDto> _bolusInjections = [];
+    private double _iob;
+    private Timer? _iobTimer;
 
     // Mini-calendar
     private DateTime _calMonth = new(DateTime.Today.Year, DateTime.Today.Month, 1);
@@ -310,9 +365,18 @@ else
             _targetCal   = settings.DailyCalories; _targetProt = settings.DailyProtein;
             _targetFat   = settings.DailyFat;      _targetCarbs = settings.DailyCarbs;
             if (settings.XeGrams > 0) _xeGrams = settings.XeGrams;
+            if (settings.DiaHours > 0) _diaHours = settings.DiaHours;
             if (settings.TargetGlucoseLow > 0 && settings.TargetGlucoseHigh > settings.TargetGlucoseLow)
             { _gLow = settings.TargetGlucoseLow; _gHigh = settings.TargetGlucoseHigh; }
         }
+
+        _bolusInjections = (await Db.GetAllAsync<InsulinInjectionDto>("insulin"))
+            .Where(i => !i.IsDeleted && i.InsulinType == (int)GlucoTrack.Shared.Entities.InsulinType.Bolus)
+            .ToList();
+        RecalcIob();
+        // Таймер: обновляем IOB каждую минуту
+        _iobTimer = new Timer(_ => InvokeAsync(() => { RecalcIob(); StateHasChanged(); }), null,
+            TimeSpan.FromSeconds(60 - DateTime.Now.Second), TimeSpan.FromMinutes(1));
 
         var today    = DateOnly.FromDateTime(DateTime.Today);
         var products = (await Db.GetAllAsync<ProductDto>("products"))
@@ -476,6 +540,15 @@ else
                      style="width:@(Math.Min(100, val / Math.Max(1, target) * 100).ToString("F0", _inv))%"></div>
             </div>
         </div>;
+
+    private void RecalcIob()
+    {
+        _iob = InsulinOnBoard.Calculate(
+            _bolusInjections.Select(i => (i.InjectedAtUtc, i.Units, i.ExtendedDurationHours)),
+            DateTime.UtcNow, _diaHours);
+    }
+
+    public void Dispose() => _iobTimer?.Dispose();
 
     private record MealGroup(string Name, string Icon, string TimeRange, double Calories);
 }

@@ -97,21 +97,52 @@ public static class InsulinOnBoard
     /// <summary>
     /// Суммарный активный инсулин на момент <paramref name="nowUtc"/>.
     /// Передавать следует только болюсные инъекции (без базала).
+    /// Для расширенного болюса передайте <paramref name="extendedDurationHours"/> > 0.
     /// </summary>
     public static double Calculate(
-        IEnumerable<(DateTime InjectedAtUtc, double Units)> bolusInjections,
+        IEnumerable<(DateTime InjectedAtUtc, double Units, double? ExtendedDurationHours)> bolusInjections,
         DateTime nowUtc,
         double diaHours = DefaultDiaHours)
     {
         if (diaHours <= 0) throw new ArgumentOutOfRangeException(nameof(diaHours), "DIA должен быть > 0");
 
         double iob = 0;
-        foreach (var (injectedAtUtc, units) in bolusInjections)
+        foreach (var (injectedAtUtc, units, extDurHours) in bolusInjections)
         {
             if (units <= 0) continue;
-            var elapsedMinutes = (nowUtc - injectedAtUtc).TotalMinutes;
-            iob += units * Fraction(elapsedMinutes, diaHours);
+            if (extDurHours is > 0)
+                iob += ExtendedFraction(units, extDurHours.Value, injectedAtUtc, nowUtc, diaHours);
+            else
+            {
+                var elapsedMinutes = (nowUtc - injectedAtUtc).TotalMinutes;
+                iob += units * Fraction(elapsedMinutes, diaHours);
+            }
         }
         return Math.Round(iob, 2);
+    }
+
+    // Overload для обратной совместимости (стандартные болюсы без поля extended)
+    public static double Calculate(
+        IEnumerable<(DateTime InjectedAtUtc, double Units)> bolusInjections,
+        DateTime nowUtc,
+        double diaHours = DefaultDiaHours)
+        => Calculate(bolusInjections.Select(x => (x.InjectedAtUtc, x.Units, (double?)null)), nowUtc, diaHours);
+
+    // Расширенный болюс: инсулин подаётся равномерно от startUtc до startUtc+extDurHours.
+    // IOB вычисляется численным интегрированием (60 слайсов).
+    private static double ExtendedFraction(double units, double extDurHours, DateTime startUtc, DateTime nowUtc, double diaHours)
+    {
+        const int slices = 60;
+        double deliveryMinutes = extDurHours * 60.0;
+        double sliceMinutes = deliveryMinutes / slices;
+        double unitsPerSlice = units / slices;
+        double iob = 0;
+        for (int i = 0; i < slices; i++)
+        {
+            var sliceDeliveredAt = startUtc.AddMinutes(sliceMinutes * (i + 0.5));
+            var elapsed = (nowUtc - sliceDeliveredAt).TotalMinutes;
+            iob += unitsPerSlice * Fraction(elapsed, diaHours);
+        }
+        return iob;
     }
 }

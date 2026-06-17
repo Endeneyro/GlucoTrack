@@ -8,15 +8,48 @@
 
 <div class="auth-wrapper">
     <div class="auth-card">
+        <svg class="auth-wave" viewBox="0 0 420 120" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="wave3grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stop-color="#e6effd" />
+                    <stop offset="100%" stop-color="#dfebfe" />
+                </linearGradient>
+            </defs>
+            <path d="M0,88 C70,30 120,35 170,48 C220,60 300,55 420,-2 L420,120 L0,120 Z" fill="#e5eefc">
+                <animate attributeName="d"
+                    values="M0,0 C70,0 120,0 170,0 C220,0 300,0 420,0 L420,120 L0,120 Z;
+                            M0,60 C70,-55 120,-45 170,-10 C220,20 300,5 420,-85 L420,120 L0,120 Z;
+                            M0,88 C70,30 120,35 170,48 C220,60 300,55 420,-2 L420,120 L0,120 Z"
+                    keyTimes="0;0.45;1" dur="1.2s" begin=".3s" fill="freeze"
+                    calcMode="spline" keySplines="0.4 0 1 1; 0 0 0.3 1" />
+            </path>
+            <path d="M0,95 C70,38 130,35 175,35 C225,35 310,32 420,-12 L420,120 L0,120 Z" fill="url(#wave3grad)">
+                <animate attributeName="d"
+                    values="M0,0 C70,0 130,0 175,0 C225,0 310,0 420,0 L420,120 L0,120 Z;
+                            M0,65 C70,-65 130,-60 175,-58 C225,-58 310,-65 420,-105 L420,120 L0,120 Z;
+                            M0,95 C70,38 130,35 175,35 C225,35 310,32 420,-12 L420,120 L0,120 Z"
+                    keyTimes="0;0.45;1" dur="1.2s" begin=".45s" fill="freeze"
+                    calcMode="spline" keySplines="0.4 0 1 1; 0 0 0.3 1" />
+            </path>
+            <path d="M0,100 C90,85 200,98 310,90 C360,87 395,80 420,75 L420,120 L0,120 Z" fill="#dce8fb">
+                <animate attributeName="d"
+                    values="M0,0 C90,0 200,0 310,0 C360,0 395,0 420,0 L420,120 L0,120 Z;
+                            M0,72 C90,45 200,62 310,48 C360,38 395,22 420,12 L420,120 L0,120 Z;
+                            M0,100 C90,85 200,98 310,90 C360,87 395,80 420,75 L420,120 L0,120 Z"
+                    keyTimes="0;0.45;1" dur="1.2s" begin=".6s" fill="freeze"
+                    calcMode="spline" keySplines="0.4 0 1 1; 0 0 0.3 1" />
+            </path>
+        </svg>
+        <div class="auth-content">
         <div class="auth-logo">
-            <span class="logo-icon">🍏</span>
-            <h1>GlucoTrack</h1>
-            <p class="auth-subtitle">Питание, здоровье и самочувствие</p>
+            <div class="logo-img-wrapper">
+                    <img src="logo.png" alt="VitaTrack" class="logo-icon" />
+            </div>
+                <h1>VitaTrack</h1>
         </div>
 
         @if (_showRegister)
         {
-            <h2>Регистрация</h2>
             <EditForm Model="_reg" OnValidSubmit="RegisterAsync">
                 <DataAnnotationsValidator />
                 <div class="form-group">
@@ -28,22 +61,25 @@
                     <InputText class="form-control" @bind-Value="_reg.Password" type="password" placeholder="••••••••" />
                 </div>
                 <div class="form-group">
+                    <label>Подтверждение пароля</label>
+                    <InputText class="form-control" @bind-Value="_reg.ConfirmPassword" type="password" placeholder="••••••••" />
+                </div>
+                <div class="form-group">
                     <label>Инвайт-код</label>
-                    <InputText class="form-control" @bind-Value="_reg.InviteCode" placeholder="Код от владельца" />
+                    <InputText class="form-control" @bind-Value="_reg.InviteCode" placeholder="Код приглашения" />
                 </div>
                 @if (_error is not null)
                 {
-                    <div class="alert alert-error">@_error</div>
+                    <div @key="(_error, _shakeKey)" class="alert alert-error @_alertClass" @onanimationend="OnAlertAnimationEnd">@_error</div>
                 }
-                <button class="btn btn-primary" type="submit" disabled="@_loading">
-                    @(_loading ? "Регистрация..." : "Зарегистрироваться")
+                <button class="btn btn-primary @(_loading ? _btnLoadingClass : "")" type="submit" disabled="@_loading">
+                    @(_loading ? "Регистрируем..." : "Зарегистрироваться")
                 </button>
             </EditForm>
-            <p class="auth-switch">Уже есть аккаунт? <a @onclick="() => _showRegister = false" href="#">Войти</a></p>
+            <p class="auth-switch">Уже есть аккаунт? <button type="button" class="auth-link-btn" @onclick="() => _showRegister = false">Войти</button></p>
         }
         else
         {
-            <h2>Вход</h2>
             <EditForm Model="_login" OnValidSubmit="LoginAsync">
                 <DataAnnotationsValidator />
                 <div class="form-group">
@@ -56,14 +92,15 @@
                 </div>
                 @if (_error is not null)
                 {
-                    <div class="alert alert-error">@_error</div>
+                    <div @key="(_error, _shakeKey)" class="alert alert-error @_alertClass" @onanimationend="OnAlertAnimationEnd">@_error</div>
                 }
-                <button class="btn btn-primary" type="submit" disabled="@_loading">
-                    @(_loading ? "Вход..." : "Войти")
+                <button class="btn btn-primary @(_loading ? _btnLoadingClass : "")" type="submit" disabled="@_loading">
+                    @(_loading ? "Входим..." : "Войти")
                 </button>
             </EditForm>
-            <p class="auth-switch">Нет аккаунта? <a @onclick="() => _showRegister = true" href="#">Зарегистрироваться</a></p>
+            <p class="auth-switch">Нет аккаунта? <button type="button" class="auth-link-btn" @onclick="() => _showRegister = true">Зарегистрироваться</button></p>
         }
+        </div>
     </div>
 </div>
 
@@ -73,40 +110,56 @@
     private string? _error;
     private bool _loading;
     private bool _showRegister;
+    private string _alertClass = "";
+    private int _shakeKey;
+    private string _btnLoadingClass = "btn-loading";
 
     private async Task LoginAsync()
     {
         _loading = true;
-        _error = null;
-        var (ok, err) = await Auth.LoginAsync(_login.Email, _login.Password);
-        if (ok)
-        {
-            Nav.NavigateTo("/", forceLoad: true);
-            return;
-        }
-        else
-        {
-            _error = err;
-        }
+        _btnLoadingClass = "btn-loading";
+        _ = StartLoopAfterFirstPassAsync();
+        var requestTask = Auth.LoginAsync(_login.Email, _login.Password);
+        await Task.WhenAll(requestTask, Task.Delay(1400));
+        var (ok, err) = requestTask.Result;
+        if (ok) { Nav.NavigateTo("/", forceLoad: true); return; }
+        if (err != _error) { _alertClass = "is-new"; _error = err; }
+        else TriggerShake();
         _loading = false;
     }
 
     private async Task RegisterAsync()
     {
-        _loading = true;
-        _error = null;
-        var (ok, err) = await Auth.RegisterAsync(_reg.Email, _reg.Password, _reg.InviteCode);
-        if (ok)
+        if (_reg.Password != _reg.ConfirmPassword)
         {
-            Nav.NavigateTo("/", forceLoad: true);
+            _alertClass = "is-new"; _error = "Пароли не совпадают."; _shakeKey++;
             return;
         }
-        else
-        {
-            _error = err;
-        }
+        _loading = true;
+        _btnLoadingClass = "btn-loading";
+        _ = StartLoopAfterFirstPassAsync();
+        var requestTask = Auth.RegisterAsync(_reg.Email, _reg.Password, _reg.InviteCode);
+        await Task.WhenAll(requestTask, Task.Delay(1400));
+        var (ok, err) = requestTask.Result;
+        if (ok) { Nav.NavigateTo("/", forceLoad: true); return; }
+        if (err != _error) { _alertClass = "is-new"; _error = err; }
+        else TriggerShake();
         _loading = false;
     }
+
+    private async Task StartLoopAfterFirstPassAsync()
+    {
+        await Task.Delay(1400);
+        if (_loading) { _btnLoadingClass = "btn-loading-loop"; StateHasChanged(); }
+    }
+
+    private void TriggerShake()
+    {
+        _alertClass = "shake";
+        _shakeKey++;
+    }
+
+    private void OnAlertAnimationEnd() => _alertClass = "";
 
     private class LoginModel
     {
@@ -118,6 +171,7 @@
     {
         public string Email { get; set; } = "";
         public string Password { get; set; } = "";
+        public string ConfirmPassword { get; set; } = "";
         public string InviteCode { get; set; } = "";
     }
 }

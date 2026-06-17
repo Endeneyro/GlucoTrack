@@ -16,10 +16,26 @@
 
 <body>
     <div id="app">
-        <div style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;font-family:sans-serif;color:#555;">
-            <div style="font-size:3rem;margin-bottom:1rem;">🍏</div>
-            <div style="font-size:1.5rem;font-weight:600;color:#16a34a;">GlucoTrack</div>
-            <div style="margin-top:0.5rem;font-size:0.9rem;">Загрузка...</div>
+        <div class="auth-wrapper" style="background:#F4F7FF;">
+            <style>
+                .splash-logo { position:relative; overflow:hidden; width:100px; height:100px; }
+                .splash-logo::after { content:''; position:absolute; top:-20%; left:-80%; width:350%; height:180%; background:linear-gradient(90deg,transparent 10%,rgba(244,247,255,.7) 50%,transparent 90%); transform:skewX(-30deg); animation:logo-shine 4s ease-in-out infinite; }
+                @keyframes logo-shine { 0%{left:-220%} 40%{left:180%} 100%{left:180%} }
+                .auth-card { box-shadow:none !important; }
+                .auth-card::before { display:none !important; }
+            </style>
+            <div class="auth-card">
+                <div class="auth-content">
+                    <div class="auth-logo">
+                        <div class="logo-img-wrapper">
+                            <div class="splash-logo">
+                                <img src="logo.png" alt="VitaTrack" class="logo-icon" />
+                            </div>
+                        </div>
+                        <h1>VitaTrack</h1>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -28,9 +44,16 @@
         <a href="" class="reload">Перезагрузить</a>
         <a class="dismiss">🗙</a>
     </div>
-    <script src="js/db.js"></script>
-    <script src="_framework/blazor.webassembly.js"></script>
-    <script>if (navigator.serviceWorker) navigator.serviceWorker.register('service-worker.js');</script>
+    <script src="js/db.js?v=2"></script>
+    <script src="_framework/blazor.webassembly.js" autostart="false"></script>
+    <script>
+        if (navigator.serviceWorker) navigator.serviceWorker.register('service-worker.js');
+        setTimeout(() => Blazor.start(), 1000);
+        window.clearGlucoDb = function () {
+            indexedDB.deleteDatabase('glucotrack_v1');
+            localStorage.removeItem('glucotrack_last_sync');
+        };
+    </script>
 </body>
 
 </html>

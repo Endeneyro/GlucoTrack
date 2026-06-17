@@ -63,6 +63,18 @@
                 </select>
             </div>
 
+            <!-- Insulin subtype (only for Insulin type) -->
+            @if (_type == PlannedEventType.Insulin)
+            {
+                <div class="form-group">
+                    <label>Вид инсулина</label>
+                    <select class="form-control" @bind="_insulinSubtype">
+                        <option value="0">⚡ Короткий (болюс)</option>
+                        <option value="1">🕐 Длительный (базал)</option>
+                    </select>
+                </div>
+            }
+
             <!-- Note -->
             <div class="form-group">
                 <label>Заметка (необязательно)</label>
@@ -186,6 +198,7 @@
     private int _hour = DateTime.Now.Hour;
     private int _min  = (DateTime.Now.Minute / 5) * 5;
     private PlannedEventType _type = PlannedEventType.Glucose;
+    private int _insulinSubtype = 0; // 0=болюс, 1=базал
     private string _note = "";
     private string? _error;
     private bool _saving;
@@ -208,6 +221,7 @@
             _hour = local.Hour;
             _min  = local.Minute;
             _type = (PlannedEventType)EditEvent.EventType;
+            _insulinSubtype = EditEvent.InsulinSubtype ?? 0;
             _note = EditEvent.Note ?? "";
             _mealItems = EditEvent.MealItems is not null ? [..EditEvent.MealItems] : [];
         }
@@ -261,11 +275,12 @@
         {
             dto = EditEvent! with
             {
-                PlannedAtUtc = planned,
-                EventType    = (int)_type,
-                Note         = string.IsNullOrWhiteSpace(_note) ? null : _note,
-                MealItems    = _type == PlannedEventType.Meal ? [.._mealItems] : null,
-                UpdatedAtUtc = DateTime.UtcNow
+                PlannedAtUtc   = planned,
+                EventType      = (int)_type,
+                Note           = string.IsNullOrWhiteSpace(_note) ? null : _note,
+                MealItems      = _type == PlannedEventType.Meal ? [.._mealItems] : null,
+                InsulinSubtype = _type == PlannedEventType.Insulin ? _insulinSubtype : null,
+                UpdatedAtUtc   = DateTime.UtcNow
             };
         }
         else
@@ -275,7 +290,8 @@
                 string.IsNullOrWhiteSpace(_note) ? null : _note,
                 null,
                 _type == PlannedEventType.Meal ? [.._mealItems] : null,
-                false, DateTime.UtcNow, false);
+                false, DateTime.UtcNow, false,
+                InsulinSubtype: _type == PlannedEventType.Insulin ? _insulinSubtype : null);
         }
 
         await Db.PutAsync("planned_events", dto, pending: false);
@@ -341,7 +357,7 @@
 
     private void Reset()
     {
-        _note = ""; _error = null; _mealItems = []; _productSearch = ""; _searchResults = [];
+        _note = ""; _error = null; _mealItems = []; _productSearch = ""; _searchResults = []; _insulinSubtype = 0;
         _hour = DateTime.Now.Hour; _min = (DateTime.Now.Minute / 5) * 5;
         _type = PlannedEventType.Glucose; _addInsulinReminder = true;
     }

@@ -63,6 +63,32 @@
                     </div>
                 }
 
+                <div class="form-group">
+                    <label>Тип подачи болюса</label>
+                    <select class="form-control" @bind="_bolusType" @bind:after="Recalculate">
+                        <option value="0">⚡ Стандартный (болюс сразу)</option>
+                        <option value="1">📐 Расширенный (равномерно во времени)</option>
+                        <option value="2">⚡📐 Двойной (часть сразу + часть растянуто)</option>
+                    </select>
+                </div>
+                @if (_bolusType >= 1)
+                {
+                    <div class="form-group">
+                        <label>Длительность подачи: <strong>@_extendedHours.ToString("F1") ч</strong></label>
+                        <input type="range" min="0.5" max="8" step="0.5" class="form-control" style="padding:.25rem 0"
+                               @bind="_extendedHours" @bind:event="oninput" @bind:after="Recalculate" />
+                        <div style="display:flex;justify-content:space-between;font-size:.72rem;color:var(--text-muted)"><span>0.5 ч</span><span>8 ч</span></div>
+                    </div>
+                }
+                @if (_bolusType == 2)
+                {
+                    <div class="form-group">
+                        <label>Немедленная часть: <strong>@_immediatePercent%</strong> (@((_immediatePercent > 0 && _result is not null) ? (_result.TotalDose * _immediatePercent / 100).ToString("F1") : "—") ЕД сразу)</label>
+                        <input type="range" min="10" max="90" step="5" class="form-control" style="padding:.25rem 0"
+                               @bind="_immediatePercent" @bind:event="oninput" />
+                    </div>
+                }
+
                 @if (_coeffs.Count > 0)
                 {
                     <div class="form-group">
@@ -103,14 +129,14 @@
         </div>
 
         <div>
-            @if (_glucose > 0 && _glucose < 3.9)
+            @if (_glucose > 0 && _glucose < _gLow)
             {
                 <div style="background:#FEE2E2;border:2px solid #F87171;border-radius:var(--r-md);padding:.75rem 1rem;margin-bottom:1rem">
                     <div style="font-weight:700;color:#991B1B;font-size:.95rem;margin-bottom:.35rem">
                         🚨 Гипогликемия — инсулин запрещён
                     </div>
                     <div style="color:#7F1D1D;font-size:.85rem;margin-bottom:.5rem">
-                        Глюкоза <strong>@_glucose.ToString("F1") ммоль/л</strong> ниже безопасного порога 3.9 ммоль/л.
+                        Глюкоза <strong>@_glucose.ToString("F1") ммоль/л</strong> ниже нижней границы диапазона @_gLow.ToString("F1") ммоль/л.
                         Введение инсулина сейчас опасно для жизни.
                     </div>
                     @if (_hypoCarbs > 0)
@@ -153,7 +179,7 @@
                 @if (_result.InsulinOnBoard > 0)
                 {
                     <div style="background:#EFF6FF;border:1.5px solid #BFDBFE;border-radius:var(--r-md);padding:.6rem .875rem;font-size:.8rem;color:#1e40af;margin-bottom:1rem">
-                        💉 Учтён активный инсулин <strong>@_result.InsulinOnBoard.ToString("F1") ЕД</strong> от недавних коррекционных уколов — коррекция уменьшена, чтобы инсулин не «сложился». Болюсы на еду не учитываются.
+                        💉 Учтён активный инсулин <strong>@_result.InsulinOnBoard.ToString("F1") ЕД</strong> от недавних болюсов — доза уменьшена, чтобы инсулин не «сложился».
                     </div>
                 }
 
@@ -166,7 +192,7 @@
                 }
 
                 <button class="btn btn-primary" style="width:100%" @onclick="LogInjectionAsync"
-                        disabled="@(_result.TotalDose <= 0 || _logged || _glucose < 3.9)">
+                        disabled="@(_result.TotalDose <= 0 || _logged || _glucose < _gLow)">
                     @(_logged ? "✓ Записано в журнал" : "Записать в журнал инсулина")
                 </button>
             }
@@ -191,7 +217,10 @@
     [SupplyParameterFromQuery] public string? Glucose  { get; set; }
     [SupplyParameterFromQuery] public string? EventId  { get; set; }
 
-    private double _carbs = 0, _glucose = 6.0, _targetGlucose = 6.0, _diaHours = 4.0;
+    private double _carbs = 0, _glucose = 6.0, _targetGlucose = 6.0, _gLow = 3.9, _diaHours = 4.0;
+    private int _bolusType = 0;     // 0=standard 1=extended 2=dual
+    private double _extendedHours = 2.0;
+    private int _immediatePercent = 50;
     private int _giCategory = 0; // 0=unknown 1=low 2=medium 3=high
     private Guid _selectedCoeffId = Guid.Empty;
     private List<TherapyCoeffDto> _coeffs = [];
@@ -227,6 +256,8 @@
             _targetGlucose = settings.TargetGlucose;
         if (settings is not null && settings.DiaHours > 0)
             _diaHours = settings.DiaHours;
+        if (settings is not null && settings.TargetGlucoseLow > 0)
+            _gLow = settings.TargetGlucoseLow;
 
         // Pre-fill from query params (called from planned insulin event)
         var notes = new List<string>();
@@ -239,20 +270,17 @@
         Recalculate();
     }
 
-    // Считаем IOB только из коррекционных уколов (Carbs == null).
-    // Еда-болюсы уже «расписаны» под углеводы того приёма и не уменьшают текущую коррекцию.
     private double CurrentIob() => InsulinOnBoard.Calculate(
         _injections
-            .Where(i => (int)GlucoTrack.Shared.Entities.InsulinType.Bolus == i.InsulinType
-                        && (i.Carbs == null || i.Carbs == 0))
-            .Select(i => (i.InjectedAtUtc, i.Units)),
+            .Where(i => (int)GlucoTrack.Shared.Entities.InsulinType.Bolus == i.InsulinType)
+            .Select(i => (i.InjectedAtUtc, i.Units, i.ExtendedDurationHours)),
         DateTime.UtcNow,
         _diaHours);
 
     private void Recalculate()
     {
         var coeff = SelectedCoeff;
-        if (coeff is null || _glucose <= 0 || coeff.InsulinToCarbRatio <= 0 || coeff.InsulinSensitivityFactor <= 0)
+        if (coeff is null || _glucose <= 0 || _glucose < _gLow || coeff.InsulinToCarbRatio <= 0 || coeff.InsulinSensitivityFactor <= 0)
         { _result = null; return; }
 
         _result = BolusCalculator.Calculate(_carbs, _glucose, _targetGlucose,
@@ -263,13 +291,41 @@
     {
         if (_result is null || _result.TotalDose <= 0) return;
         Guid? linkedEventId = Guid.TryParse(EventId, out var evId) ? evId : null;
-        var dto = new InsulinInjectionDto(
-            Guid.NewGuid(), DateTime.UtcNow, _result.TotalDose,
-            InsulinType: (int)GlucoTrack.Shared.Entities.InsulinType.Bolus,
-            Carbs: _carbs > 0 ? _carbs : null,
-            GlucoseBefore: _glucose,
-            DateTime.UtcNow, IsDeleted: false, LinkedEventId: linkedEventId);
-        await Db.PutAsync("insulin", dto, pending: true);
+        var now = DateTime.UtcNow;
+
+        if (_bolusType == 2) // dual wave: немедленная часть + отдельная расширенная
+        {
+            double immUnits = Math.Round(_result.TotalDose * _immediatePercent / 100.0, 2);
+            double extUnits = Math.Round(_result.TotalDose - immUnits, 2);
+            if (immUnits > 0)
+            {
+                await Db.PutAsync("insulin", new InsulinInjectionDto(
+                    Guid.NewGuid(), now, immUnits,
+                    InsulinType: (int)GlucoTrack.Shared.Entities.InsulinType.Bolus,
+                    Carbs: _carbs > 0 ? _carbs : null, GlucoseBefore: _glucose,
+                    now, IsDeleted: false, LinkedEventId: linkedEventId), pending: true);
+            }
+            if (extUnits > 0)
+            {
+                await Db.PutAsync("insulin", new InsulinInjectionDto(
+                    Guid.NewGuid(), now, extUnits,
+                    InsulinType: (int)GlucoTrack.Shared.Entities.InsulinType.Bolus,
+                    Carbs: null, GlucoseBefore: _glucose,
+                    now, IsDeleted: false, LinkedEventId: linkedEventId,
+                    ExtendedDurationHours: _extendedHours), pending: true);
+            }
+        }
+        else
+        {
+            var dto = new InsulinInjectionDto(
+                Guid.NewGuid(), now, _result.TotalDose,
+                InsulinType: (int)GlucoTrack.Shared.Entities.InsulinType.Bolus,
+                Carbs: _carbs > 0 ? _carbs : null,
+                GlucoseBefore: _glucose,
+                now, IsDeleted: false, LinkedEventId: linkedEventId,
+                ExtendedDurationHours: _bolusType == 1 ? _extendedHours : null);
+            await Db.PutAsync("insulin", dto, pending: true);
+        }
 
         // Mark the linked planned event as done
         if (linkedEventId.HasValue)

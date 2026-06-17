@@ -32,7 +32,8 @@ public record PlannedEventDto(
     List<PlannedMealItem>? MealItems,
     bool IsDone,
     DateTime UpdatedAtUtc,
-    bool IsDeleted
+    bool IsDeleted,
+    int? InsulinSubtype = null  // 0=болюс, 1=базал; null для не-инсулиновых событий
 );
 
 public record PlannedMealItem(Guid ProductId, string ProductName, double Grams, int MeasureType = 0, double? PieceWeightG = null);
@@ -55,7 +56,8 @@ public record InsulinInjectionDto(
     double? GlucoseBefore,
     DateTime UpdatedAtUtc,
     bool IsDeleted,
-    Guid? LinkedEventId = null);
+    Guid? LinkedEventId = null,
+    double? ExtendedDurationHours = null);
 
 public record ProductIngredientDto(
     Guid Id,

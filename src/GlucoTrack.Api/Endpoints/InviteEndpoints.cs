@@ -14,6 +14,7 @@ public static class InviteEndpoints
 
         group.MapPost("/", CreateInvite);
         group.MapGet("/", ListInvites);
+        group.MapDelete("/{code}", DeleteInvite);
     }
 
     private static async Task<IResult> CreateInvite(
@@ -45,6 +46,27 @@ public static class InviteEndpoints
             .Select(i => new { i.Code, i.CreatedAtUtc, i.UsedAtUtc })
             .ToListAsync();
         return Results.Ok(invites);
+    }
+
+    private static async Task<IResult> DeleteInvite(
+        string code,
+        ClaimsPrincipal principal,
+        AppDbContext db)
+    {
+        var userId = Guid.Parse(principal.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var invite = await db.InviteCodes
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(i => i.Code == code && i.CreatedByUserId == userId);
+
+        if (invite is null)
+            return Results.NotFound();
+
+        if (invite.UsedAtUtc is not null)
+            return Results.Problem("Нельзя удалить использованный инвайт.", statusCode: 400);
+
+        db.InviteCodes.Remove(invite);
+        await db.SaveChangesAsync();
+        return Results.Ok();
     }
 
     private static string GenerateCode() =>

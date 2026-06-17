@@ -22,6 +22,7 @@ builder.Services.AddIdentityCore<AppUser>(opts =>
     opts.Password.RequireNonAlphanumeric = false;
     opts.Password.RequiredLength = 8;
 })
+.AddRoles<IdentityRole<Guid>>()
 .AddEntityFrameworkStores<AppDbContext>()
 .AddDefaultTokenProviders();
 
@@ -51,6 +52,27 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.MigrateAsync();
+
+    var userManager = scope.ServiceProvider.GetRequiredService<UserManager<AppUser>>();
+    var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
+    var config = scope.ServiceProvider.GetRequiredService<IConfiguration>();
+
+    const string adminRole = "Admin";
+    if (!await roleManager.RoleExistsAsync(adminRole))
+        await roleManager.CreateAsync(new IdentityRole<Guid>(adminRole));
+
+    var adminEmail = config["Admin:Email"] ?? "admin@glucotrack.local";
+    var adminPassword = config["Admin:Password"] ?? "Admin1234";
+
+    var admin = await userManager.FindByEmailAsync(adminEmail);
+    if (admin is null)
+    {
+        admin = new AppUser { UserName = adminEmail, Email = adminEmail, EmailConfirmed = true };
+        var result = await userManager.CreateAsync(admin, adminPassword);
+        if (!result.Succeeded)
+            throw new Exception("Admin seed failed: " + string.Join(", ", result.Errors.Select(e => e.Description)));
+        await userManager.AddToRoleAsync(admin, adminRole);
+    }
 }
 
 app.UseBlazorFrameworkFiles();
