@@ -4,7 +4,9 @@ public enum ProductCategory
 {
     Other = 0, Meat = 1, Fish = 2, Dairy = 3, Grains = 4,
     Vegetables = 5, Fruits = 6, Bakery = 7, Drinks = 8,
-    Nuts = 9, Sweets = 10, Eggs = 11, Legumes = 12
+    Nuts = 9, Sweets = 10, Eggs = 11, Legumes = 12,
+    FermentedDairy = 13, Sausages = 14, Alcohol = 15, Pasta = 16, SemiFinished = 17,
+    Mushrooms = 18, Poultry = 19, Sauces = 20
 }
 
 public enum ProductOwnerType { Base = 0, Private = 1, Shared = 2 }
@@ -26,6 +28,14 @@ public class Product
 
     public bool IsComposite { get; set; }
     public double? TotalYieldG { get; set; }
+
+    public string? Manufacturer { get; set; }
+    public bool HasImage { get; set; }
+
+    // Set when this product is a resilient copy of a Shared product, created automatically
+    // when a user favorites someone else's shared product (so it survives if the
+    // original owner deletes their product or un-shares it).
+    public Guid? ClonedFromProductId { get; set; }
 
     public bool IsVerified { get; set; }
     public string? Barcode { get; set; }
@@ -91,6 +101,13 @@ public class ProductReaction
     public Guid UserId { get; set; }
     public Guid ProductId { get; set; }
     public int Reaction { get; set; } // 1=like, -1=dislike
+    public DateTime CreatedAtUtc { get; set; }
+}
+
+public class ProductHide
+{
+    public Guid UserId { get; set; }
+    public Guid ProductId { get; set; }
     public DateTime CreatedAtUtc { get; set; }
 }
 

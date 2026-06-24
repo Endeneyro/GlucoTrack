@@ -91,29 +91,39 @@
                         var idx = _mealItems.IndexOf(item);
                         var prod = _allProducts.FirstOrDefault(p => p.Id == item.ProductId);
                         var byPiece = prod?.MeasureType == 1;
-                        <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem">
-                            <div style="flex:1;font-size:.875rem">@item.ProductName</div>
-                            <input class="form-control" type="number" min="1" step="@(byPiece ? "1" : "5")" style="width:80px"
+                        <div class="home-card" style="padding:.4rem .65rem;margin-bottom:.5rem;display:flex;gap:.6rem;align-items:center">
+                            <div class="product-icon-cell" style="flex-shrink:0">
+                                @if (prod is { HasImage: true })
+                                {
+                                    <img src="@ProductCategories.ImageUrl(prod)" alt="" class="product-row-img"
+                                         onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" />
+                                }
+                                <div class="product-cat-icon" style="display:@(prod is { HasImage: true } ? "none" : "flex")">
+                                    <img src="icons/@(ProductCategories.IconName(prod?.Category ?? 0)).svg" />
+                                </div>
+                            </div>
+                            <div style="flex:1;min-width:0;font-size:.875rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">@item.ProductName</div>
+                            <input class="form-control" type="number" min="1" step="@(byPiece ? "1" : "5")" style="width:80px;flex-shrink:0"
                                    value="@item.Grams"
                                    @onchange="e => UpdateGrams(idx, double.TryParse(e.Value?.ToString(), out var g) ? g : item.Grams)" />
-                            <span style="font-size:.8rem;color:var(--c-text-muted)">@(byPiece ? "шт" : "г")</span>
-                            <button class="btn btn-ghost btn-icon btn-sm" @onclick="() => _mealItems.RemoveAt(idx)">✕</button>
+                            <span style="font-size:.8rem;color:var(--c-text-muted);flex-shrink:0">@(byPiece ? "шт" : "г")</span>
+                            <button class="btn btn-ghost btn-icon btn-sm" style="flex-shrink:0" @onclick="() => _mealItems.RemoveAt(idx)">✕</button>
                         </div>
                     }
 
                     <!-- Product search -->
                     <div class="form-group" style="margin-bottom:.5rem">
-                        <input class="form-control" type="text" placeholder="Поиск продукта..."
-                               @bind="_productSearch" @oninput="SearchProducts" />
+                        <div style="display:flex;gap:.5rem">
+                            <input class="form-control" type="text" placeholder="Поиск продукта..." style="flex:1"
+                                   @bind="_productSearch" @oninput="SearchProducts" />
+                            <button class="btn btn-ghost btn-sm" style="flex-shrink:0" @onclick="() => _showCatalog = true"><img src="icons/catalog.svg" width="32" height="32" /> Каталог</button>
+                        </div>
                         @if (_searchResults.Count > 0)
                         {
                             <div class="search-results">
                                 @foreach (var p in _searchResults)
                                 {
-                                    <div class="search-result-item" @onclick="() => AddMealItem(p)">
-                                        <div>@p.Name</div>
-                                        <div class="search-result-sub">@p.CaloriesPer100g.ToString("F0") ккал · Б @p.ProteinPer100g.ToString("F1") · Ж @p.FatPer100g.ToString("F1") · У @p.CarbsPer100g.ToString("F1") г/100г</div>
-                                    </div>
+                                    <ProductSearchResultItem Product="p" OnClick="AddMealItem" />
                                 }
                             </div>
                         }
@@ -182,6 +192,13 @@
     </div>
 }
 
+@if (_showCatalog)
+{
+    <ProductCatalogModal Products="_allProducts"
+                          OnSelect="AddMealItem"
+                          OnClose="() => _showCatalog = false" />
+}
+
 @code {
     [Parameter] public bool Visible { get; set; }
     [Parameter] public DateOnly Date { get; set; }
@@ -209,6 +226,7 @@
     private List<ProductDto> _searchResults = [];
     private string _productSearch = "";
     private bool _addInsulinReminder = true;
+    private bool _showCatalog;
 
     protected override async Task OnParametersSetAsync()
     {

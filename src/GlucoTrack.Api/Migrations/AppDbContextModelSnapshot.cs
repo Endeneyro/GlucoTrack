@@ -260,6 +260,65 @@ namespace GlucoTrack.Api.Migrations
                     b.ToTable("MealEntries");
                 });
 
+            modelBuilder.Entity("GlucoTrack.Shared.Entities.MealTemplate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("HasImage")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("MealTemplates");
+                });
+
+            modelBuilder.Entity("GlucoTrack.Shared.Entities.MealTemplateItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<double>("Grams")
+                        .HasColumnType("double precision");
+
+                    b.Property<Guid>("MealTemplateId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("MeasureType")
+                        .HasColumnType("integer");
+
+                    b.Property<double?>("PieceWeightG")
+                        .HasColumnType("double precision");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ProductName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MealTemplateId");
+
+                    b.ToTable("MealTemplateItems");
+                });
+
             modelBuilder.Entity("GlucoTrack.Shared.Entities.Product", b =>
                 {
                     b.Property<Guid>("Id")
@@ -287,6 +346,9 @@ namespace GlucoTrack.Api.Migrations
                     b.Property<double?>("Chromium")
                         .HasColumnType("double precision");
 
+                    b.Property<Guid?>("ClonedFromProductId")
+                        .HasColumnType("uuid");
+
                     b.Property<double?>("Copper")
                         .HasColumnType("double precision");
 
@@ -307,6 +369,9 @@ namespace GlucoTrack.Api.Migrations
 
                     b.Property<int?>("GlycemicIndex")
                         .HasColumnType("integer");
+
+                    b.Property<bool>("HasImage")
+                        .HasColumnType("boolean");
 
                     b.Property<double?>("Iodine")
                         .HasColumnType("double precision");
@@ -331,6 +396,9 @@ namespace GlucoTrack.Api.Migrations
 
                     b.Property<double?>("Manganese")
                         .HasColumnType("double precision");
+
+                    b.Property<string>("Manufacturer")
+                        .HasColumnType("text");
 
                     b.Property<int>("MeasureType")
                         .HasColumnType("integer");
@@ -419,11 +487,29 @@ namespace GlucoTrack.Api.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("ClonedFromProductId");
+
                     b.HasIndex("OwnerType");
 
                     b.HasIndex("UserId");
 
                     b.ToTable("Products");
+                });
+
+            modelBuilder.Entity("GlucoTrack.Shared.Entities.ProductHide", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("UserId", "ProductId");
+
+                    b.ToTable("ProductHides");
                 });
 
             modelBuilder.Entity("GlucoTrack.Shared.Entities.ProductIngredient", b =>
@@ -522,6 +608,80 @@ namespace GlucoTrack.Api.Migrations
                     b.ToTable("TherapyCoefficients");
                 });
 
+            modelBuilder.Entity("GlucoTrack.Shared.Entities.UserInsulin", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("InsulinType")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Note")
+                        .HasColumnType("text");
+
+                    b.Property<double?>("TypicalDose")
+                        .HasColumnType("double precision");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("UserInsulins");
+                });
+
+            modelBuilder.Entity("GlucoTrack.Shared.Entities.UserProfile", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly?>("DateOfBirth")
+                        .HasColumnType("date");
+
+                    b.Property<int?>("DiabetesType")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("DiagnosisYear")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("Gender")
+                        .HasColumnType("integer");
+
+                    b.Property<double?>("HeightCm")
+                        .HasColumnType("double precision");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<double?>("WeightKg")
+                        .HasColumnType("double precision");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("UserProfiles");
+                });
+
             modelBuilder.Entity("GlucoTrack.Shared.Entities.UserSettings", b =>
                 {
                     b.Property<Guid>("Id")
@@ -541,7 +701,6 @@ namespace GlucoTrack.Api.Migrations
                         .HasColumnType("double precision");
 
                     b.Property<double>("DiaHours")
-                        .HasDefaultValue(4.0)
                         .HasColumnType("double precision");
 
                     b.Property<bool>("DisclaimerAccepted")
@@ -703,6 +862,17 @@ namespace GlucoTrack.Api.Migrations
                     b.ToTable("AspNetUserTokens", (string)null);
                 });
 
+            modelBuilder.Entity("GlucoTrack.Shared.Entities.MealTemplateItem", b =>
+                {
+                    b.HasOne("GlucoTrack.Shared.Entities.MealTemplate", "MealTemplate")
+                        .WithMany("Items")
+                        .HasForeignKey("MealTemplateId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("MealTemplate");
+                });
+
             modelBuilder.Entity("GlucoTrack.Shared.Entities.ProductIngredient", b =>
                 {
                     b.HasOne("GlucoTrack.Shared.Entities.Product", "CompositeProduct")
@@ -773,44 +943,15 @@ namespace GlucoTrack.Api.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("GlucoTrack.Shared.Entities.MealTemplate", b =>
+                {
+                    b.Navigation("Items");
+                });
+
             modelBuilder.Entity("GlucoTrack.Shared.Entities.Product", b =>
                 {
                     b.Navigation("Ingredients");
                 });
-
-            modelBuilder.Entity("GlucoTrack.Shared.Entities.UserProfile", b =>
-                {
-                    b.Property<Guid>("Id").HasColumnType("uuid");
-                    b.Property<double?>("HeightCm").HasColumnType("double precision");
-                    b.Property<double?>("WeightKg").HasColumnType("double precision");
-                    b.Property<DateOnly?>("DateOfBirth").HasColumnType("date");
-                    b.Property<int?>("Gender").HasColumnType("integer");
-                    b.Property<int?>("DiabetesType").HasColumnType("integer");
-                    b.Property<int?>("DiagnosisYear").HasColumnType("integer");
-                    b.Property<Guid>("UserId").HasColumnType("uuid");
-                    b.Property<DateTime>("UpdatedAtUtc").HasColumnType("timestamp with time zone");
-                    b.Property<bool>("IsDeleted").HasColumnType("boolean");
-                    b.HasKey("Id");
-                    b.HasIndex("UserId");
-                    b.ToTable("UserProfiles");
-                });
-
-            modelBuilder.Entity("GlucoTrack.Shared.Entities.UserInsulin", b =>
-                {
-                    b.Property<Guid>("Id").HasColumnType("uuid");
-                    b.Property<string>("Name").IsRequired().HasColumnType("text");
-                    b.Property<int>("InsulinType").HasColumnType("integer");
-                    b.Property<double?>("TypicalDose").HasColumnType("double precision");
-                    b.Property<bool>("IsActive").HasColumnType("boolean");
-                    b.Property<string>("Note").HasColumnType("text");
-                    b.Property<Guid>("UserId").HasColumnType("uuid");
-                    b.Property<DateTime>("UpdatedAtUtc").HasColumnType("timestamp with time zone");
-                    b.Property<bool>("IsDeleted").HasColumnType("boolean");
-                    b.HasKey("Id");
-                    b.HasIndex("UserId");
-                    b.ToTable("UserInsulins");
-                });
-
 #pragma warning restore 612, 618
         }
     }

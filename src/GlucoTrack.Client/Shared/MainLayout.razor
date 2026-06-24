@@ -50,16 +50,16 @@
                 <span class="logo-text">VitaTrack</span>
             </div>
             <ul class="nav-menu">
-                <li><NavLink href="/" Match="NavLinkMatch.All"><img class="nav-icon" src="icons/home.svg" alt="" /> Главная</NavLink></li>
-                <li><NavLink href="/calendar"><img class="nav-icon" src="icons/calendar.svg" alt="" /> Календарь</NavLink></li>
-                <li><NavLink href="/meals"><img class="nav-icon" src="icons/meals.svg" alt="" /> Питание</NavLink></li>
-                <li><NavLink href="/products"><img class="nav-icon" src="icons/products.svg" alt="" /> Продукты</NavLink></li>
-                <li><NavLink href="/glucose"><img class="nav-icon" src="icons/glucose.svg" alt="" /> Глюкоза</NavLink></li>
-                <li><NavLink href="/insulin"><img class="nav-icon" src="icons/insulin.svg" alt="" /> Инсулин</NavLink></li>
-                <li><NavLink href="/bolus"><img class="nav-icon" src="icons/bolus.svg" alt="" /> Болюс</NavLink></li>
-                <li><NavLink href="/analysis"><img class="nav-icon" src="icons/analysis.svg" alt="" /> Аналитика</NavLink></li>
-                <li><NavLink href="/profile"><img class="nav-icon" src="icons/profile.svg" alt="" /> Профиль</NavLink></li>
-                <li><NavLink href="/settings"><img class="nav-icon" src="icons/settings.svg" alt="" /> Настройки</NavLink></li>
+                <li><NavLink href="/" Match="NavLinkMatch.All" class="glow-text"><img class="nav-icon" src="icons/home.svg" alt="" /> Главная</NavLink></li>
+                <li><NavLink href="/calendar" class="glow-text"><img class="nav-icon" src="icons/calendar.svg" alt="" /> Календарь</NavLink></li>
+                <li><NavLink href="/meals" class="glow-text"><img class="nav-icon" src="icons/meals.svg" alt="" /> Питание</NavLink></li>
+                <li><NavLink href="/products" class="glow-text"><img class="nav-icon" src="icons/products.svg" alt="" /> Продукты</NavLink></li>
+                <li><NavLink href="/glucose" class="glow-text"><img class="nav-icon" src="icons/glucose.svg" alt="" /> Глюкоза</NavLink></li>
+                <li><NavLink href="/insulin" class="glow-text"><img class="nav-icon" src="icons/insulin.svg" alt="" /> Инсулин</NavLink></li>
+                <li><NavLink href="/bolus" class="glow-text"><img class="nav-icon" src="icons/bolus.svg" alt="" /> Болюс</NavLink></li>
+                <li><NavLink href="/analysis" class="glow-text"><img class="nav-icon" src="icons/analysis.svg" alt="" /> Аналитика</NavLink></li>
+                <li><NavLink href="/profile" class="glow-text"><img class="nav-icon" src="icons/profile.svg" alt="" /> Профиль</NavLink></li>
+                <li><NavLink href="/settings" class="glow-text"><img class="nav-icon" src="icons/settings.svg" alt="" /> Настройки</NavLink></li>
             </ul>
             <div class="sidebar-footer">
                 <div class="sync-info">
@@ -80,9 +80,9 @@
                     }
                     else if (Sync.LastSyncUtc.HasValue)
                     {
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                        <img src="/icons/cloud.svg" width="26" height="26" alt="" />
                         <div>
-                            <div style="color:#10B981;font-size:.72rem">Синхронизировано</div>
+                            <div style="color:#3b82f6;font-size:.72rem">Синхронизировано</div>
                             <div style="color:#A0AEC0;font-size:.68rem">@Sync.LastSyncUtc.Value.ToLocalTime().ToString("dd.MM.yyyy, HH:mm")</div>
                         </div>
                     }

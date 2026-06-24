@@ -3,6 +3,7 @@ using GlucoTrack.Api.Services;
 using GlucoTrack.Shared.DTOs.Sync;
 using GlucoTrack.Shared.Entities;
 using Microsoft.EntityFrameworkCore;
+using SkiaSharp;
 
 namespace GlucoTrack.Api.Endpoints;
 
@@ -18,19 +19,28 @@ public static class ProductEndpoints
         g.MapDelete("/{id:guid}", DeleteAsync);
         g.MapPost("/{id:guid}/share", ShareAsync);
         g.MapPost("/{id:guid}/clone", CloneAsync);
+        g.MapPost("/{id:guid}/ensure-clone", EnsureCloneAsync);
         g.MapPost("/{id:guid}/react", ReactAsync);
         g.MapGet("/favorites", GetFavoritesAsync);
+        g.MapPost("/{id:guid}/hide", HideAsync);
+        g.MapDelete("/{id:guid}/hide", UnhideAsync);
+        g.MapGet("/hidden", GetHiddenAsync);
         g.MapPost("/{id:guid}/image", UploadImageAsync).DisableAntiforgery();
         g.MapGet("/{id:guid}/image", ServeImageAsync).AllowAnonymous();
 
         return app;
     }
 
-    // GET /api/products/search?q=&category=&source=external&skip=&take=
+    // GET /api/products/search?q=&category=&source=external|shared|base|mine&skip=&take=
     // source=external → skip own products (used to load base+shared separately)
+    // source=shared   → only the shared bucket (other users' shared products)
+    // source=base     → only the base bucket (admin-curated catalog)
+    // source=mine     → only own products (usage counts only ever accrue to your own
+    //                    products — clones included — so "Часто используемые" never
+    //                    needs to touch the base/shared buckets at all)
     private static async Task<IResult> SearchAsync(
-        string? q, int? category, string? source, int skip, int take,
-        AppDbContext db, ICurrentUserService currentUser)
+        string? q, int? category, string? source, AppDbContext db, ICurrentUserService currentUser,
+        int skip = 0, int take = 0)
     {
         take = Math.Min(take <= 0 ? 30 : take, 100);
         var userId = currentUser.UserId;
@@ -41,10 +51,26 @@ public static class ProductEndpoints
             .Select(r => r.ProductId).ToListAsync();
         var dislikedSet = disliked.ToHashSet();
 
+        // Load hidden product IDs to exclude (user chose to hide a base/shared product)
+        var hiddenSet = (await db.ProductHides.IgnoreQueryFilters()
+            .Where(h => h.UserId == userId)
+            .Select(h => h.ProductId).ToListAsync()).ToHashSet();
+
         // Load user reactions map
         var reactions = await db.ProductReactions.IgnoreQueryFilters()
             .Where(r => r.UserId == userId)
             .ToDictionaryAsync(r => r.ProductId, r => r.Reaction);
+
+        // Reactions on shared products are stored against the user's resilient clone
+        // (see ReactAsync) — resolve those back to the original shared product's id so
+        // the star shows as filled when browsing the original.
+        var myClones = await db.Products.IgnoreQueryFilters()
+            .Where(p => p.UserId == userId && p.ClonedFromProductId != null)
+            .Select(p => new { p.Id, p.ClonedFromProductId })
+            .ToListAsync();
+        var cloneReactionBySource = myClones
+            .Where(c => reactions.ContainsKey(c.Id))
+            .ToDictionary(c => c.ClonedFromProductId!.Value, c => reactions[c.Id]);
 
         // Load usage counts
         var usage = await db.ProductUsages.IgnoreQueryFilters()
@@ -53,7 +79,7 @@ public static class ProductEndpoints
 
         var query = db.Products.IgnoreQueryFilters()
             .Include(p => p.Ingredients).ThenInclude(i => i.IngredientProduct)
-            .Where(p => !p.IsDeleted && !dislikedSet.Contains(p.Id));
+            .Where(p => !p.IsDeleted && !dislikedSet.Contains(p.Id) && !hiddenSet.Contains(p.Id));
 
         if (!string.IsNullOrWhiteSpace(q))
             query = query.Where(p => p.Name.ToLower().Contains(q.ToLower()));
@@ -66,7 +92,7 @@ public static class ProductEndpoints
         // Bucket and order: mine → base → shared
         List<(Product p, string src)> buckets = [];
 
-        if (source != "external")
+        if (source != "external" && source != "shared" && source != "base")
         {
             buckets.AddRange(all
                 .Where(p => p.UserId == userId)
@@ -75,22 +101,29 @@ public static class ProductEndpoints
                 .Select(p => (p, "mine")));
         }
 
-        buckets.AddRange(all
-            .Where(p => p.UserId == null) // base
-            .OrderBy(p => p.Name)
-            .Select(p => (p, "base")));
+        if (source != "shared" && source != "mine")
+        {
+            buckets.AddRange(all
+                .Where(p => p.UserId == null) // base
+                .OrderBy(p => p.Name)
+                .Select(p => (p, "base")));
+        }
 
-        buckets.AddRange(all
-            .Where(p => p.UserId != null && p.UserId != userId && p.OwnerType == ProductOwnerType.Shared)
-            .OrderByDescending(p => p.LikesCount - p.DislikesCount)
-            .ThenBy(p => p.Name)
-            .Select(p => (p, "shared")));
+        if (source != "base" && source != "mine")
+        {
+            buckets.AddRange(all
+                .Where(p => p.UserId != null && p.UserId != userId && p.OwnerType == ProductOwnerType.Shared)
+                .OrderByDescending(p => p.LikesCount - p.DislikesCount)
+                .ThenBy(p => p.Name)
+                .Select(p => (p, "shared")));
+        }
 
         var results = buckets.Skip(skip).Take(take)
             .Select(b => new ProductSearchItemDto(
                 SyncEndpoints.MapProductToDto(b.p),
                 usage.GetValueOrDefault(b.p.Id),
-                reactions.TryGetValue(b.p.Id, out var r) ? r : null,
+                reactions.TryGetValue(b.p.Id, out var r) ? r
+                    : cloneReactionBySource.TryGetValue(b.p.Id, out var cr) ? cr : null,
                 b.src))
             .ToList();
 
@@ -101,16 +134,19 @@ public static class ProductEndpoints
     private static async Task<IResult> CreateAsync(
         ProductCreateRequest req, AppDbContext db, ICurrentUserService currentUser)
     {
-        var userId = currentUser.UserId;
+        // Admins manage the shared base catalog: their products belong to no one
+        // specifically (UserId = null) and are visible to every user as "Базовые".
+        var userId = currentUser.IsAdmin ? (Guid?)null : currentUser.UserId;
         var product = new Product
         {
             Id = Guid.NewGuid(), UserId = userId,
             Name = req.Name, Category = (ProductCategory)req.Category,
-            OwnerType = ProductOwnerType.Private,
+            OwnerType = currentUser.IsAdmin ? ProductOwnerType.Base : ProductOwnerType.Private,
             MeasureType = (ProductMeasureType)req.MeasureType,
             PieceWeightG = req.PieceWeightG,
             DefaultServingG = req.DefaultServingG > 0 ? req.DefaultServingG : 100,
             IsComposite = req.IsComposite, TotalYieldG = req.TotalYieldG,
+            Manufacturer = req.Manufacturer,
             UpdatedAtUtc = DateTime.UtcNow
         };
 
@@ -143,9 +179,11 @@ public static class ProductEndpoints
             .Include(p => p.Ingredients)
             .FirstOrDefaultAsync(p => p.Id == id);
         if (product is null) return Results.NotFound();
-        if (product.UserId != currentUser.UserId) return Results.Forbid();
+        bool canEdit = product.UserId == currentUser.UserId || (currentUser.IsAdmin && product.UserId is null);
+        if (!canEdit) return Results.Forbid();
 
         product.Name = req.Name;
+        product.Manufacturer = req.Manufacturer;
         product.Category = (ProductCategory)req.Category;
         product.MeasureType = (ProductMeasureType)req.MeasureType;
         product.PieceWeightG = req.PieceWeightG;
@@ -181,7 +219,7 @@ public static class ProductEndpoints
     {
         var product = await db.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == id);
         if (product is null) return Results.NotFound();
-        if (product.UserId != currentUser.UserId) return Results.Forbid();
+        if (product.UserId != currentUser.UserId && !(currentUser.IsAdmin && product.UserId is null)) return Results.Forbid();
         product.IsDeleted = true; product.UpdatedAtUtc = DateTime.UtcNow;
         await db.SaveChangesAsync();
         return Results.NoContent();
@@ -207,10 +245,68 @@ public static class ProductEndpoints
             .FirstOrDefaultAsync(p => p.Id == id);
         if (src is null) return Results.NotFound();
 
-        var clone = new Product
+        var clone = CreateCloneEntity(src, currentUser.UserId, nameSuffix: " (копия)");
+        db.Products.Add(clone);
+
+        foreach (var ing in src.Ingredients)
+            db.ProductIngredients.Add(new ProductIngredient
+            {
+                Id = Guid.NewGuid(), CompositeProductId = clone.Id,
+                IngredientProductId = ing.IngredientProductId, Grams = ing.Grams
+            });
+
+        await db.SaveChangesAsync();
+        return Results.Ok(new { id = clone.Id });
+    }
+
+    // POST /api/products/{id}/ensure-clone — transparently used when picking a shared
+    // product into a meal/template (not just when favoriting it), so the reference
+    // survives the original owner deleting or un-sharing the product. Returns the
+    // product itself unchanged if it isn't someone else's shared product.
+    private static async Task<IResult> EnsureCloneAsync(Guid id, AppDbContext db, ICurrentUserService currentUser)
+    {
+        var userId = currentUser.UserId;
+        var src = await db.Products.IgnoreQueryFilters()
+            .Include(p => p.Ingredients).ThenInclude(i => i.IngredientProduct)
+            .FirstOrDefaultAsync(p => p.Id == id);
+        if (src is null) return Results.NotFound();
+
+        // Already own — nothing to clone. Otherwise (base, or someone else's shared
+        // product) create/reuse a resilient private copy so it keeps working offline
+        // and survives the source product being deleted, un-shared, or unreachable.
+        if (src.UserId == userId)
+            return Results.Ok(SyncEndpoints.MapProductToDto(src));
+
+        var clone = await db.Products.IgnoreQueryFilters()
+            .Include(p => p.Ingredients).ThenInclude(i => i.IngredientProduct)
+            .FirstOrDefaultAsync(p => p.UserId == userId && p.ClonedFromProductId == id);
+        if (clone is null)
         {
-            Id = Guid.NewGuid(), UserId = currentUser.UserId,
-            Name = src.Name + " (копия)",
+            clone = CreateCloneEntity(src, userId, clonedFromId: id);
+            db.Products.Add(clone);
+            foreach (var ing in src.Ingredients)
+                db.ProductIngredients.Add(new ProductIngredient
+                {
+                    Id = Guid.NewGuid(), CompositeProductId = clone.Id,
+                    IngredientProductId = ing.IngredientProductId, Grams = ing.Grams
+                });
+            await db.SaveChangesAsync();
+            clone = await db.Products.IgnoreQueryFilters()
+                .Include(p => p.Ingredients).ThenInclude(i => i.IngredientProduct)
+                .FirstAsync(p => p.Id == clone.Id);
+        }
+
+        return Results.Ok(SyncEndpoints.MapProductToDto(clone));
+    }
+
+    // Shared field-copy logic used by both the explicit "Clone" action and the
+    // automatic resilient-copy created when a user favorites someone else's shared product.
+    private static Product CreateCloneEntity(Product src, Guid userId, Guid? clonedFromId = null, string? nameSuffix = null)
+        => new()
+        {
+            Id = Guid.NewGuid(), UserId = userId,
+            Name = src.Name + nameSuffix,
+            Manufacturer = src.Manufacturer,
             Category = src.Category, OwnerType = ProductOwnerType.Private,
             MeasureType = src.MeasureType, PieceWeightG = src.PieceWeightG,
             DefaultServingG = src.DefaultServingG, IsComposite = src.IsComposite,
@@ -227,20 +323,9 @@ public static class ProductEndpoints
             Sodium = src.Sodium, Chlorine = src.Chlorine, Magnesium = src.Magnesium,
             Sulfur = src.Sulfur, Iron = src.Iron, Zinc = src.Zinc, Selenium = src.Selenium, Iodine = src.Iodine,
             Manganese = src.Manganese, Copper = src.Copper, Fluorine = src.Fluorine, Chromium = src.Chromium,
+            ClonedFromProductId = clonedFromId,
             UpdatedAtUtc = DateTime.UtcNow
         };
-        db.Products.Add(clone);
-
-        foreach (var ing in src.Ingredients)
-            db.ProductIngredients.Add(new ProductIngredient
-            {
-                Id = Guid.NewGuid(), CompositeProductId = clone.Id,
-                IngredientProductId = ing.IngredientProductId, Grams = ing.Grams
-            });
-
-        await db.SaveChangesAsync();
-        return Results.Ok(new { id = clone.Id });
-    }
 
     // POST /api/products/{id}/react  body: { reaction: 1|-1|0 }
     private static async Task<IResult> ReactAsync(
@@ -248,14 +333,67 @@ public static class ProductEndpoints
     {
         var userId = currentUser.UserId;
 
-        var product = await db.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == id);
+        var product = await db.Products.IgnoreQueryFilters()
+            .Include(p => p.Ingredients)
+            .FirstOrDefaultAsync(p => p.Id == id);
         if (product is null) return Results.NotFound();
+
+        int newReaction = req.Reaction;
+        bool isSharedOther = product.OwnerType == ProductOwnerType.Shared && product.UserId != userId;
+
+        // Reactions to someone else's shared product are stored against a resilient private
+        // copy instead of the original, so favorites survive the owner deleting/un-sharing it.
+        Product? clone = null;
+        ProductReaction? cloneReaction = null;
+        if (isSharedOther)
+        {
+            clone = await db.Products.IgnoreQueryFilters()
+                .FirstOrDefaultAsync(p => p.UserId == userId && p.ClonedFromProductId == id);
+            if (clone is not null)
+                cloneReaction = await db.ProductReactions.IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(r => r.UserId == userId && r.ProductId == clone.Id);
+        }
+
+        if (isSharedOther && (newReaction == 1 || cloneReaction is not null))
+        {
+            int oldCloneReaction = cloneReaction?.Reaction ?? 0;
+
+            if (newReaction == 1)
+            {
+                if (clone is null)
+                {
+                    clone = CreateCloneEntity(product, userId, clonedFromId: id);
+                    db.Products.Add(clone);
+                    foreach (var ing in product.Ingredients)
+                        db.ProductIngredients.Add(new ProductIngredient
+                        {
+                            Id = Guid.NewGuid(), CompositeProductId = clone.Id,
+                            IngredientProductId = ing.IngredientProductId, Grams = ing.Grams
+                        });
+                }
+                if (cloneReaction is null)
+                    db.ProductReactions.Add(new ProductReaction
+                        { UserId = userId, ProductId = clone.Id, Reaction = 1, CreatedAtUtc = DateTime.UtcNow });
+                else
+                    cloneReaction.Reaction = 1;
+            }
+            else if (cloneReaction is not null)
+            {
+                db.ProductReactions.Remove(cloneReaction);
+            }
+
+            // Social proof (like count) is tracked on the original.
+            if (oldCloneReaction == 1) product.LikesCount = Math.Max(0, product.LikesCount - 1);
+            if (newReaction == 1) product.LikesCount++;
+
+            await db.SaveChangesAsync();
+            return Results.Ok(new { product.LikesCount, product.DislikesCount, clonedProductId = clone?.Id });
+        }
 
         var existing = await db.ProductReactions.IgnoreQueryFilters()
             .FirstOrDefaultAsync(r => r.UserId == userId && r.ProductId == id);
 
         int oldReaction = existing?.Reaction ?? 0;
-        int newReaction = req.Reaction;
 
         // Update reaction table
         if (newReaction == 0)
@@ -282,6 +420,48 @@ public static class ProductEndpoints
         return Results.Ok(new { product.LikesCount, product.DislikesCount });
     }
 
+    // POST /api/products/{id}/hide — hide a base/shared product from this user's browsing
+    private static async Task<IResult> HideAsync(Guid id, AppDbContext db, ICurrentUserService currentUser)
+    {
+        var userId = currentUser.UserId;
+        var exists = await db.ProductHides.IgnoreQueryFilters()
+            .AnyAsync(h => h.UserId == userId && h.ProductId == id);
+        if (!exists)
+            db.ProductHides.Add(new ProductHide { UserId = userId, ProductId = id, CreatedAtUtc = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+        return Results.Ok();
+    }
+
+    // DELETE /api/products/{id}/hide — unhide
+    private static async Task<IResult> UnhideAsync(Guid id, AppDbContext db, ICurrentUserService currentUser)
+    {
+        var userId = currentUser.UserId;
+        var existing = await db.ProductHides.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(h => h.UserId == userId && h.ProductId == id);
+        if (existing is not null)
+        {
+            db.ProductHides.Remove(existing);
+            await db.SaveChangesAsync();
+        }
+        return Results.Ok();
+    }
+
+    // GET /api/products/hidden
+    private static async Task<IResult> GetHiddenAsync(AppDbContext db, ICurrentUserService currentUser)
+    {
+        var userId = currentUser.UserId;
+        var hiddenIds = await db.ProductHides.IgnoreQueryFilters()
+            .Where(h => h.UserId == userId)
+            .Select(h => h.ProductId).ToListAsync();
+
+        var products = await db.Products.IgnoreQueryFilters()
+            .Include(p => p.Ingredients).ThenInclude(i => i.IngredientProduct)
+            .Where(p => hiddenIds.Contains(p.Id) && !p.IsDeleted)
+            .ToListAsync();
+
+        return Results.Ok(products.Select(SyncEndpoints.MapProductToDto).ToList());
+    }
+
     // GET /api/products/favorites
     private static async Task<IResult> GetFavoritesAsync(AppDbContext db, ICurrentUserService currentUser)
     {
@@ -301,7 +481,8 @@ public static class ProductEndpoints
     // GET /api/products/{id}/image — serve image regardless of extension
     private static IResult ServeImageAsync(Guid id, IWebHostEnvironment env)
     {
-        var dir = Path.Combine(env.WebRootPath, "images", "products");
+        var root = env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot");
+        var dir = Path.Combine(root, "images", "products");
         foreach (var ext in new[] { ".jpg", ".jpeg", ".png", ".webp" })
         {
             var path = Path.Combine(dir, $"{id}{ext}");
@@ -314,35 +495,72 @@ public static class ProductEndpoints
         return Results.NotFound();
     }
 
-    // POST /api/products/{id}/image  — multipart upload, max 2 MB
+    // POST /api/products/{id}/image  — multipart upload with SkiaSharp processing
     private static async Task<IResult> UploadImageAsync(
         Guid id, IFormFile file, AppDbContext db,
         ICurrentUserService currentUser, IWebHostEnvironment env)
     {
         var product = await db.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == id);
         if (product is null) return Results.NotFound();
-        if (product.UserId != currentUser.UserId) return Results.Forbid();
+        if (product.UserId != currentUser.UserId && !(currentUser.IsAdmin && product.UserId is null)) return Results.Forbid();
 
-        const long maxBytes = 2 * 1024 * 1024; // 2 MB
-        if (file.Length > maxBytes)
-            return Results.BadRequest("Файл слишком большой. Максимум 2 МБ.");
+        const long maxUploadBytes = 8 * 1024 * 1024; // 8 MB raw upload limit
+        if (file.Length > maxUploadBytes)
+            return Results.BadRequest("Файл слишком большой. Максимум 8 МБ.");
 
         var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
         if (ext is not (".jpg" or ".jpeg" or ".png" or ".webp"))
-            return Results.BadRequest("Допустимые форматы: jpg, png, webp.");
+            return Results.BadRequest("Допустимые форматы: JPG, PNG, WebP.");
 
-        var imagesDir = Path.Combine(env.WebRootPath, "images", "products");
+        // Read into memory for SkiaSharp
+        using var ms = new MemoryStream();
+        await file.CopyToAsync(ms);
+        var rawBytes = ms.ToArray();
+
+        // Decode and validate
+        using var original = SKBitmap.Decode(rawBytes);
+        if (original is null)
+            return Results.BadRequest("Файл повреждён или не является изображением.");
+
+        if (original.Width < 20 || original.Height < 20)
+            return Results.BadRequest($"Слишком маленькое изображение ({original.Width}×{original.Height} px). Минимум 20×20.");
+
+        // Resize to max 1024px on the longest side, keep aspect ratio
+        const int maxDim = 1024;
+        SKBitmap bitmap;
+        if (original.Width > maxDim || original.Height > maxDim)
+        {
+            double scale = Math.Min((double)maxDim / original.Width, (double)maxDim / original.Height);
+            var newW = Math.Max(1, (int)(original.Width * scale));
+            var newH = Math.Max(1, (int)(original.Height * scale));
+            bitmap = original.Resize(new SKImageInfo(newW, newH), SKSamplingOptions.Default);
+        }
+        else
+        {
+            bitmap = original;
+        }
+
+        // Encode as JPEG 85 — unified format for all uploads
+        using var skImage = SKImage.FromBitmap(bitmap);
+        using var encoded = skImage.Encode(SKEncodedImageFormat.Jpeg, 85);
+        if (bitmap != original) bitmap.Dispose();
+
+        var webRoot = env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot");
+        var imagesDir = Path.Combine(webRoot, "images", "products");
         Directory.CreateDirectory(imagesDir);
 
-        // Remove any previous image for this product (different extension)
+        // Remove any previous image for this product
         foreach (var old in Directory.GetFiles(imagesDir, $"{id}.*"))
             File.Delete(old);
 
-        var filePath = Path.Combine(imagesDir, $"{id}{ext}");
-        await using var stream = File.Create(filePath);
-        await file.CopyToAsync(stream);
+        // Always save as .jpg
+        var filePath = Path.Combine(imagesDir, $"{id}.jpg");
+        await File.WriteAllBytesAsync(filePath, encoded.ToArray());
 
-        return Results.Ok(new { url = $"/images/products/{id}{ext}" });
+        product.HasImage = true;
+        await db.SaveChangesAsync();
+
+        return Results.Ok(new { url = $"/api/products/{id}/image" });
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -436,7 +654,8 @@ public static class ProductEndpoints
         double? Sodium, double? Chlorine, double? Magnesium,
         double? Sulfur, double? Iron, double? Zinc, double? Selenium, double? Iodine,
         double? Manganese, double? Copper, double? Fluorine, double? Chromium,
-        List<IngredientRequest>? Ingredients);
+        List<IngredientRequest>? Ingredients,
+        string? Manufacturer = null);
 
     private record IngredientRequest(Guid ProductId, double Grams);
     private record ReactRequest(int Reaction);

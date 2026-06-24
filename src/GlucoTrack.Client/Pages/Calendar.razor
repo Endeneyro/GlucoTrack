@@ -82,7 +82,7 @@
         else if (_pendingBolusTime.HasValue && _selected == DateOnly.FromDateTime(DateTime.Today))
         {
             <div style="background:#EFF6FF;border:1.5px solid #BFDBFE;border-radius:var(--r-md);padding:.75rem 1rem;margin-bottom:1rem;display:flex;align-items:center;gap:.75rem">
-                <span style="font-size:1.3rem">🍽</span>
+                <img src="icons/meals.svg" style="width:1.3rem;height:1.3rem" />
                 <div style="flex:1;font-size:.875rem">
                     <div style="font-weight:600;color:#1e40af">Сахар выше нормы, но скоро плановый болюс в @_pendingBolusTime.Value.ToString("HH:mm")</div>
                     <div style="color:#1d4ed8">Коррекция будет учтена в нём — отдельную инъекцию делать не нужно, иначе инсулин «сложится».</div>
@@ -115,7 +115,12 @@
 
                         <div class="@itemCls" @onclick="() => OnDiaryItemClick(item)">
                             <div class="diary-item-time">@item.Time.ToString("HH:mm")</div>
-                            <div class="diary-item-icon">@item.Icon</div>
+                            <div class="diary-item-icon">
+                                @if (item.Icon.EndsWith(".svg"))
+                                { <img src="@item.Icon" style="width:1.4rem;height:1.4rem" /> }
+                                else
+                                { @item.Icon }
+                            </div>
                             <div class="diary-item-body">
                                 <div class="diary-item-title">@item.Title</div>
                                 @if (!string.IsNullOrEmpty(item.Sub))
@@ -184,7 +189,7 @@
         <div class="modal-card" @onclick:stopPropagation="true">
             <div class="modal-header">
                 <div>
-                    <div class="modal-title">🍽 Приём пищи</div>
+                    <div class="modal-title"><img src="icons/meals.svg" style="width:1.1rem;height:1.1rem;vertical-align:middle;margin-right:.35rem" />Приём пищи</div>
                     <div style="font-size:.82rem;color:var(--c-text-muted)">
                         @_viewMealEvent.PlannedAtUtc.ToLocalTime().ToString("HH:mm")
                         @if (!string.IsNullOrEmpty(_viewMealEvent.Note))
@@ -404,8 +409,15 @@
                 sub = string.Join(" · ", parts);
             }
 
+            var mealIcon = (GlucoTrack.Shared.Entities.MealType)items[0].MealType switch
+            {
+                GlucoTrack.Shared.Entities.MealType.Breakfast => "icons/breakfast.svg",
+                GlucoTrack.Shared.Entities.MealType.Lunch     => "icons/lunch.svg",
+                GlucoTrack.Shared.Entities.MealType.Dinner    => "icons/dinner.svg",
+                _                                             => "icons/snack.svg"
+            };
             _diaryItems.Add(new DiaryItem(
-                _selected.ToDateTime(group.Key), "🍽",
+                _selected.ToDateTime(group.Key), mealIcon,
                 title, sub, false, true, null, -1, null));
         }
 

@@ -87,7 +87,7 @@
     /* ── Meal list ── */
     .meal-type-item { display:flex; align-items:center; gap:.75rem; padding:.55rem 0; border-bottom:1px solid #E4EAFB; }
     .meal-type-item:last-child { border-bottom:none; }
-    .meal-type-icon { font-size:1.3rem; }
+    .meal-type-icon { display:block; flex-shrink:0; }
     .meal-type-name { font-size:.875rem; font-weight:600; color:#1A2B4A; }
     .meal-type-time { font-size:.7rem; color:#6B7FA3; }
     .meal-type-kcal { font-size:.875rem; font-weight:700; color:#3B82F6; white-space:nowrap; }
@@ -274,7 +274,7 @@ else
                 @foreach (var g in _mealGroups)
                 {
                     <div class="meal-type-item">
-                        <span class="meal-type-icon">@g.Icon</span>
+                        <img src="@g.Icon" width="32" height="32" class="meal-type-icon" />
                         <div style="flex:1">
                             <div class="meal-type-name">@g.Name</div>
                             <div class="meal-type-time">@g.TimeRange</div>
@@ -448,19 +448,23 @@ else
         _mealGroups = [];
         var groups = new[]
         {
-            (Name:"Завтрак",  Icon:"🌅", Min:5,  Max:10, Range:"05:00 – 10:59"),
-            (Name:"Обед",     Icon:"☀️", Min:11, Max:15, Range:"11:00 – 15:59"),
-            (Name:"Ужин",     Icon:"🌙", Min:16, Max:21, Range:"16:00 – 21:59"),
-            (Name:"Перекус",  Icon:"🍎", Min:-1, Max:-1, Range:"другое время"),
+            (Name:"Завтрак",  Icon:"icons/breakfast.svg", Min:5,  Max:10, Range:"05:00 – 10:59"),
+            (Name:"Обед",     Icon:"icons/lunch.svg",     Min:11, Max:15, Range:"11:00 – 15:59"),
+            (Name:"Ужин",     Icon:"icons/dinner.svg",    Min:16, Max:21, Range:"16:00 – 21:59"),
+            (Name:"Перекус",  Icon:"icons/snack.svg",     Min:-1, Max:-1, Range:"другое время"),
         };
 
         foreach (var g in groups)
         {
             List<MealEntryDto> grouped;
             if (g.Min == -1)
-                grouped = meals.Where(m => m.Time.Hour < 5 || m.Time.Hour > 21).ToList();
+                grouped = meals.Where(m =>
+                    m.MealType == (int)GlucoTrack.Shared.Entities.MealType.Snack ||
+                    m.Time.Hour < 5 || m.Time.Hour > 21).ToList();
             else
-                grouped = meals.Where(m => m.Time.Hour >= g.Min && m.Time.Hour <= g.Max).ToList();
+                grouped = meals.Where(m =>
+                    m.MealType != (int)GlucoTrack.Shared.Entities.MealType.Snack &&
+                    m.Time.Hour >= g.Min && m.Time.Hour <= g.Max).ToList();
 
             if (grouped.Count == 0) continue;
             double kcal = 0;

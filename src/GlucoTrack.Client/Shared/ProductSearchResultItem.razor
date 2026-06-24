@@ -1,0 +1,29 @@
+@using GlucoTrack.Shared.DTOs.Sync
+@using GlucoTrack.Client.Services
+
+<div class="search-result-item" style="display:flex;align-items:center;gap:.6rem" @onclick="() => OnClick.InvokeAsync(Product)">
+    <div class="product-icon-cell" style="flex-shrink:0">
+        @if (Product.HasImage)
+        {
+            <img src="@ProductCategories.ImageUrl(Product)" alt="" class="product-row-img"
+                 onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" />
+        }
+        <div class="product-cat-icon" style="display:@(Product.HasImage ? "none" : "flex")">
+            <img src="icons/@(ProductCategories.IconName(Product.Category)).svg" />
+        </div>
+    </div>
+    <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:.875rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">@Product.Name</div>
+        <div class="search-result-sub">
+            @Product.CaloriesPer100g.ToString("F0") ккал ·
+            <span style="color:var(--c-protein);font-weight:600">Б</span> @Product.ProteinPer100g.ToString("F1") ·
+            <span style="color:var(--c-fat);font-weight:600">Ж</span> @Product.FatPer100g.ToString("F1") ·
+            <span style="color:var(--c-carbs);font-weight:600">У</span> @Product.CarbsPer100g.ToString("F1")
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ProductDto Product { get; set; } = null!;
+    [Parameter] public EventCallback<ProductDto> OnClick { get; set; }
+}

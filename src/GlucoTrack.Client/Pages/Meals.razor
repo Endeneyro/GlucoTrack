@@ -74,34 +74,30 @@
             <h4>Новый приём пищи</h4>
             <div class="input-row" style="margin-bottom:.75rem">
                 <div class="form-group">
-                    <label>Тип приёма</label>
-                    <select class="form-control" @bind="_newMealType">
-                        <option value="@MealType.Breakfast">🌅 Завтрак</option>
-                        <option value="@MealType.Lunch">☀️ Обед</option>
-                        <option value="@MealType.Dinner">🌙 Ужин</option>
-                        <option value="@MealType.Snack">🍎 Перекус</option>
-                    </select>
-                </div>
-                <div class="form-group">
                     <label>Время</label>
                     <input class="form-control" type="time" value="@_newTime" @oninput="e => _newTime = e.Value?.ToString() ?? _newTime" />
+                </div>
+                <div class="form-group" style="justify-content:flex-end;display:flex;align-items:center;gap:.5rem;padding-top:1.5rem">
+                    <input type="checkbox" id="snack-cb" @bind="_isSnack" style="width:1.1rem;height:1.1rem;cursor:pointer" />
+                    <label for="snack-cb" style="margin:0;cursor:pointer;user-select:none">🍎 Перекус</label>
                 </div>
             </div>
 
             <!-- Product search -->
             <div class="form-group">
                 <label>Продукт</label>
-                <input class="form-control" type="text" placeholder="Поиск по названию..."
-                       @bind="_productSearch" @oninput="SearchProducts" />
+                <div style="display:flex;gap:.5rem">
+                    <input class="form-control" type="text" placeholder="Поиск по названию..."
+                           style="flex:1"
+                           @bind="_productSearch" @oninput="SearchProducts" />
+                    <button class="btn btn-ghost btn-sm" style="flex-shrink:0" @onclick="() => _showCatalog = true"><img src="icons/catalog.svg" width="32" height="32" /> Каталог</button>
+                </div>
                 @if (_searchResults.Count > 0 && _selectedProduct is null)
                 {
                     <div class="search-results">
                         @foreach (var p in _searchResults)
                         {
-                            <div class="search-result-item" @onclick="() => SelectProduct(p)">
-                                <div>@p.Name</div>
-                                <div class="search-result-sub">@p.CaloriesPer100g ккал · Б @p.ProteinPer100g · Ж @p.FatPer100g · У @p.CarbsPer100g</div>
-                            </div>
+                            <ProductSearchResultItem Product="p" OnClick="SelectProduct" />
                         }
                     </div>
                 }
@@ -173,7 +169,10 @@
         @foreach (var group in _dayEntries.GroupBy(e => (MealType)e.MealType).OrderBy(g => (int)g.Key))
         {
             <div class="meal-group">
-                <div class="meal-group-title">@MealTypeLabel(group.Key)</div>
+                <div class="meal-group-title">
+                    <img src="@MealTypeIcon(group.Key)" style="width:1.2rem;height:1.2rem;vertical-align:middle;margin-right:.35rem" />
+                    @MealTypeName(group.Key)
+                </div>
                 <div class="entry-list">
                     @foreach (var entry in group.OrderBy(e => e.Time))
                     {
@@ -208,16 +207,23 @@
     }
 </div>
 
+@if (_showCatalog)
+{
+    <ProductCatalogModal Products="_products"
+                          OnSelect="SelectProduct"
+                          OnClose="() => _showCatalog = false" />
+}
+
 @code {
     private DateOnly _date = DateOnly.FromDateTime(DateTime.Today);
     private List<MealEntryDto> _allEntries = [], _dayEntries = [];
     private List<ProductDto> _products = [];
     private Dictionary<Guid, ProductDto> _productsMap = [];
-    private bool _loading = true, _showAddMeal;
+    private bool _loading = true, _showAddMeal, _showCatalog;
     private string? _mealErr;
 
     // Add form
-    private MealType _newMealType = MealType.Breakfast;
+    private bool _isSnack;
     private string _newTime = DateTime.Now.ToString("HH:mm");
     private double _newGrams = 100;
     private string _productSearch = "";
@@ -361,14 +367,15 @@
         if (_newGrams <= 0) { _mealErr = "Масса должна быть больше 0"; return; }
         if (!TimeOnly.TryParse(_newTime, out var time)) { _mealErr = "Неверное время"; return; }
 
-        var dto = new MealEntryDto(Guid.NewGuid(), _date, time, (int)_newMealType,
+        var mealType = _isSnack ? MealType.Snack : MealTypeFromTime(time);
+        var dto = new MealEntryDto(Guid.NewGuid(), _date, time, (int)mealType,
             _selectedProduct.Id, _newGrams, DateTime.UtcNow, false);
         await Db.PutAsync("meals", dto, pending: true);
         _allEntries.Add(dto);
         // Reload injections so the banner sees boluses entered after the page loaded
         _injections = (await Db.GetAllAsync<InsulinInjectionDto>("insulin")).Where(i => !i.IsDeleted).ToList();
         FilterDay();
-        _showAddMeal = false; ClearProduct(); _newGrams = 100;
+        _showAddMeal = false; ClearProduct(); _newGrams = 100; _isSnack = false;
         _ = Sync.SyncAsync();
 
         // Auto-schedule post-meal glucose check in 2 hours (GlucoseModule only)
@@ -435,6 +442,30 @@
             "Измерьте сахар после еды", null, null, false, DateTime.UtcNow, false);
         await Db.PutAsync("planned_events", reminder, pending: false);
     }
+
+    private static MealType MealTypeFromTime(TimeOnly t) => t.Hour switch
+    {
+        >= 5 and <= 10 => MealType.Breakfast,
+        >= 11 and <= 15 => MealType.Lunch,
+        >= 16 and <= 21 => MealType.Dinner,
+        _ => MealType.Snack
+    };
+
+    private static string MealTypeIcon(MealType t) => t switch
+    {
+        MealType.Breakfast => "icons/breakfast.svg",
+        MealType.Lunch     => "icons/lunch.svg",
+        MealType.Dinner    => "icons/dinner.svg",
+        _                  => "icons/snack.svg"
+    };
+
+    private static string MealTypeName(MealType t) => t switch
+    {
+        MealType.Breakfast => "Завтрак",
+        MealType.Lunch     => "Обед",
+        MealType.Dinner    => "Ужин",
+        _                  => "Перекус"
+    };
 
     private static string MealTypeLabel(MealType t) => t switch
     {

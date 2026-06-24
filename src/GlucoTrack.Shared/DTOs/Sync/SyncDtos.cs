@@ -117,14 +117,18 @@ public record ProductDto(
     double? Chromium,
     List<ProductIngredientDto>? Ingredients,
     DateTime UpdatedAtUtc,
-    bool IsDeleted);
+    bool IsDeleted,
+    string? Manufacturer = null,
+    bool HasImage = false,
+    Guid? ClonedFromProductId = null);
 
 // Search result — includes per-user context (reaction, usage, source)
 public record ProductSearchItemDto(
     ProductDto Product,
     int UseCount,
     int? MyReaction,   // null=none 1=like -1=dislike
-    string Source);    // "mine" | "base" | "shared"
+    string Source,     // "mine" | "base" | "shared"
+    bool IsHidden = false);
 
 public record TherapyCoeffDto(
     Guid Id,
@@ -182,7 +186,8 @@ public record MealTemplateDto(
     string Name,
     List<PlannedMealItem> Items,
     DateTime UpdatedAtUtc,
-    bool IsDeleted);
+    bool IsDeleted,
+    bool HasImage = false);
 
 // ── Sync request/response ────────────────────────────────────────────────────
 
@@ -194,7 +199,8 @@ public record SyncPushRequest(
     List<TherapyCoeffDto> TherapyCoefficients,
     UserSettingsDto? UserSettings,
     UserProfileDto? UserProfile = null,
-    List<UserInsulinDto>? UserInsulins = null);
+    List<UserInsulinDto>? UserInsulins = null,
+    List<MealTemplateDto>? MealTemplates = null);
 
 public record SyncPushResponse(
     List<Guid> Conflicts,
@@ -209,4 +215,5 @@ public record SyncPullResponse(
     List<TherapyCoeffDto> TherapyCoefficients,
     UserSettingsDto? UserSettings,
     UserProfileDto? UserProfile = null,
-    List<UserInsulinDto>? UserInsulins = null);
+    List<UserInsulinDto>? UserInsulins = null,
+    List<MealTemplateDto>? MealTemplates = null);

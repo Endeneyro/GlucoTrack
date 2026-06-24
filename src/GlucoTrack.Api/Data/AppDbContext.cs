@@ -22,12 +22,15 @@ public class AppDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, Guid>
     public DbSet<Product> Products => Set<Product>();
     public DbSet<ProductIngredient> ProductIngredients => Set<ProductIngredient>();
     public DbSet<ProductReaction> ProductReactions => Set<ProductReaction>();
+    public DbSet<ProductHide> ProductHides => Set<ProductHide>();
     public DbSet<ProductUsage> ProductUsages => Set<ProductUsage>();
     public DbSet<MealEntry> MealEntries => Set<MealEntry>();
     public DbSet<GlucoseReading> GlucoseReadings => Set<GlucoseReading>();
     public DbSet<InsulinInjection> InsulinInjections => Set<InsulinInjection>();
     public DbSet<InviteCode> InviteCodes => Set<InviteCode>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<MealTemplate> MealTemplates => Set<MealTemplate>();
+    public DbSet<MealTemplateItem> MealTemplateItems => Set<MealTemplateItem>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -40,6 +43,13 @@ public class AppDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, Guid>
         builder.Entity<MealEntry>().HasQueryFilter(e => e.UserId == _currentUserId && !e.IsDeleted);
         builder.Entity<GlucoseReading>().HasQueryFilter(e => e.UserId == _currentUserId && !e.IsDeleted);
         builder.Entity<InsulinInjection>().HasQueryFilter(e => e.UserId == _currentUserId && !e.IsDeleted);
+        builder.Entity<MealTemplate>().HasQueryFilter(e => e.UserId == _currentUserId && !e.IsDeleted);
+
+        builder.Entity<MealTemplateItem>()
+            .HasOne(i => i.MealTemplate)
+            .WithMany(t => t.Items)
+            .HasForeignKey(i => i.MealTemplateId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         // Products: base (null) + own + shared visible to everyone
         builder.Entity<Product>().HasQueryFilter(e =>
@@ -50,6 +60,8 @@ public class AppDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, Guid>
             .HasIndex(p => p.UserId);
         builder.Entity<Product>()
             .HasIndex(p => p.OwnerType);
+        builder.Entity<Product>()
+            .HasIndex(p => p.ClonedFromProductId);
 
         // ProductIngredient
         builder.Entity<ProductIngredient>()
@@ -75,6 +87,12 @@ public class AppDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, Guid>
             .HasKey(u => new { u.UserId, u.ProductId });
         builder.Entity<ProductUsage>()
             .HasQueryFilter(u => u.UserId == _currentUserId);
+
+        // ProductHide — composite PK
+        builder.Entity<ProductHide>()
+            .HasKey(h => new { h.UserId, h.ProductId });
+        builder.Entity<ProductHide>()
+            .HasQueryFilter(h => h.UserId == _currentUserId);
 
         builder.Entity<InviteCode>()
             .HasIndex(i => i.Code)

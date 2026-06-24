@@ -53,6 +53,31 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.MigrateAsync();
 
+    // One-time backfill: mark HasImage=true for products whose image file already
+    // exists on disk from before the HasImage column was introduced.
+    {
+        var env = scope.ServiceProvider.GetRequiredService<IWebHostEnvironment>();
+        var imagesDir = Path.Combine(env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot"), "images", "products");
+        if (Directory.Exists(imagesDir))
+        {
+            var idsWithImage = Directory.GetFiles(imagesDir)
+                .Select(f => Path.GetFileNameWithoutExtension(f))
+                .Select(name => Guid.TryParse(name, out var g) ? g : (Guid?)null)
+                .Where(g => g.HasValue)
+                .Select(g => g!.Value)
+                .ToHashSet();
+
+            if (idsWithImage.Count > 0)
+            {
+                var toUpdate = await db.Products.IgnoreQueryFilters()
+                    .Where(p => idsWithImage.Contains(p.Id) && !p.HasImage)
+                    .ToListAsync();
+                foreach (var p in toUpdate) p.HasImage = true;
+                if (toUpdate.Count > 0) await db.SaveChangesAsync();
+            }
+        }
+    }
+
     var userManager = scope.ServiceProvider.GetRequiredService<UserManager<AppUser>>();
     var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
     var config = scope.ServiceProvider.GetRequiredService<IConfiguration>();
@@ -71,12 +96,31 @@ using (var scope = app.Services.CreateScope())
         var result = await userManager.CreateAsync(admin, adminPassword);
         if (!result.Succeeded)
             throw new Exception("Admin seed failed: " + string.Join(", ", result.Errors.Select(e => e.Description)));
-        await userManager.AddToRoleAsync(admin, adminRole);
     }
+    // Ensure role membership even for an admin account that already existed before the
+    // Admin role was introduced — otherwise it would never end up in the role in the DB.
+    if (!await userManager.IsInRoleAsync(admin, adminRole))
+        await userManager.AddToRoleAsync(admin, adminRole);
 }
 
 app.UseBlazorFrameworkFiles();
-app.UseStaticFiles();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        OnPrepareResponse = ctx =>
+        {
+            ctx.Context.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+            ctx.Context.Response.Headers["Pragma"] = "no-cache";
+            ctx.Context.Response.Headers["Expires"] = "0";
+        }
+    });
+}
+else
+{
+    app.UseStaticFiles();
+}
 
 app.UseAuthentication();
 app.UseAuthorization();
@@ -88,6 +132,7 @@ app.MapMealEndpoints();
 app.MapGlucoseEndpoints();
 app.MapInsulinEndpoints();
 app.MapProductEndpoints();
+app.MapMealTemplateEndpoints();
 app.MapSettingsEndpoints();
 app.MapFallbackToFile("index.html");
 

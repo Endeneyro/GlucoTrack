@@ -6,9 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>GlucoTrack</title>
     <base href="/" />
-    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/app.css?v=20260619c" />
     <link rel="icon" type="image/png" href="favicon.png" />
-    <link href="GlucoTrack.Client.styles.css" rel="stylesheet" />
     <link href="manifest.webmanifest" rel="manifest" />
     <link rel="apple-touch-icon" sizes="512x512" href="icon-512.png" />
     <link rel="apple-touch-icon" sizes="192x192" href="icon-192.png" />
@@ -52,6 +51,22 @@
         window.clearGlucoDb = function () {
             indexedDB.deleteDatabase('glucotrack_v1');
             localStorage.removeItem('glucotrack_last_sync');
+        };
+        window.resetFileInput = function (id) {
+            var el = document.getElementById(id);
+            if (el) el.value = '';
+        };
+        window.getBoundingRect = function (id) {
+            var el = document.getElementById(id);
+            if (!el) return null;
+            var r = el.getBoundingClientRect();
+            return { top: r.bottom, right: window.innerWidth - r.right };
+        };
+        window.getBoundingRectLeft = function (id) {
+            var el = document.getElementById(id);
+            if (!el) return null;
+            var r = el.getBoundingClientRect();
+            return { top: r.bottom, left: r.left };
         };
     </script>
 </body>

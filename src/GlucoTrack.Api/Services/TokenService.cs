@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using GlucoTrack.Api.Data;
 using GlucoTrack.Shared.DTOs.Auth;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.IdentityModel.Tokens;
 
 namespace GlucoTrack.Api.Services;
@@ -12,31 +13,37 @@ public class TokenService
 {
     private readonly IConfiguration _config;
     private readonly AppDbContext _db;
+    private readonly UserManager<AppUser> _userManager;
 
-    public TokenService(IConfiguration config, AppDbContext db)
+    public TokenService(IConfiguration config, AppDbContext db, UserManager<AppUser> userManager)
     {
         _config = config;
         _db = db;
+        _userManager = userManager;
     }
 
     public async Task<AuthResponse> CreateTokensAsync(AppUser user)
     {
-        var accessToken = GenerateAccessToken(user);
+        var accessToken = await GenerateAccessTokenAsync(user);
         var refreshToken = await CreateRefreshTokenAsync(user.Id);
         var expiresAt = DateTime.UtcNow.AddMinutes(GetAccessTokenMinutes());
         return new AuthResponse(accessToken, refreshToken, expiresAt);
     }
 
-    public string GenerateAccessToken(AppUser user)
+    public async Task<string> GenerateAccessTokenAsync(AppUser user)
     {
+        var roles = await _userManager.GetRolesAsync(user);
+
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["Jwt:Key"]!));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-        var claims = new[]
+        var claims = new List<Claim>
         {
-            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-            new Claim(ClaimTypes.Email, user.Email!),
-            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
+            new(ClaimTypes.Email, user.Email!),
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
         };
+        claims.AddRange(roles.Select(r => new Claim(ClaimTypes.Role, r)));
+
         var token = new JwtSecurityToken(
             issuer: _config["Jwt:Issuer"],
             audience: _config["Jwt:Audience"],

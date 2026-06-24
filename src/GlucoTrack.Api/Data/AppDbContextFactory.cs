@@ -16,5 +16,6 @@ public class AppDbContextFactory : IDesignTimeDbContextFactory<AppDbContext>
     private class DesignTimeCurrentUser : ICurrentUserService
     {
         public Guid UserId => Guid.Empty;
+        public bool IsAdmin => false;
     }
 }
