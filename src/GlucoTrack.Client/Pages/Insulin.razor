@@ -52,8 +52,13 @@
             <h4>@(EventId != null ? "Введите данные по событию" : Alert == 1 ? "Коррекционный укол" : "Новая запись")</h4>
         @if (Alert == 1 && _glucosePrefilled)
         {
-            <div style="background:#FEF3C7;border:1px solid #F59E0B;border-radius:var(--r-sm);padding:.5rem .75rem;margin-bottom:.75rem;font-size:.82rem;color:#92400E">
-                ⚠️ Расчётная коррекционная доза на основе ваших коэффициентов терапии. Уточните при необходимости.
+            <div class="bolus-result" style="padding:1.25rem;margin-bottom:1rem">
+                <div style="font-size:.875rem;color:var(--c-text-muted);margin-bottom:.5rem">Итоговая доза</div>
+                <div class="bolus-total" style="font-size:2.5rem">@_units.ToString("F1")</div>
+                <div class="bolus-unit">ЕД инсулина</div>
+                <div style="font-size:.78rem;color:var(--c-text-muted);margin-top:.65rem">
+                    Рассчитана по вашим коэффициентам терапии на основе текущей глюкозы. При необходимости измените значение поля «Доза» ниже.
+                </div>
             </div>
         }
 
@@ -219,7 +224,9 @@
                 double target = settings?.TargetGlucose ?? 6.0;
                 if (settings?.DiaHours > 0) _diaHours = settings.DiaHours;
 
-                if (coeff is not null && coeff.InsulinSensitivityFactor > 0)
+                // IC обязан быть > 0: BolusCalculator бросает исключение при IC <= 0,
+                // иначе страница коррекции падает при загрузке.
+                if (coeff is not null && coeff.InsulinSensitivityFactor > 0 && coeff.InsulinToCarbRatio > 0)
                 {
                     var result = BolusCalculator.Calculate(0, g, target,
                         coeff.InsulinToCarbRatio, coeff.InsulinSensitivityFactor, CurrentIob());
@@ -235,7 +242,16 @@
             _linkedEvent = events.FirstOrDefault(e => e.Id == EventId.Value);
 
             if (_linkedEvent is not null)
+            {
                 _dt = _linkedEvent.PlannedAtUtc.ToLocalTime();
+                // Honor the planned insulin subtype (0=болюс, 1=базал) so a planned basal
+                // event isn't silently recorded as a bolus. Falls back to Bolus when unset.
+                _type = (_linkedEvent.InsulinSubtype ?? 0) == 1 ? InsulinType.Basal : InsulinType.Bolus;
+            }
+
+            // DIA for IOB hint must come from settings on this path too (not just the Alert path).
+            var settings = (await Db.GetAllAsync<UserSettingsDto>("settings")).FirstOrDefault();
+            if (settings?.DiaHours > 0) _diaHours = settings.DiaHours;
 
             await PrefillFromContextAsync();
             _showForm = true;
@@ -260,7 +276,7 @@
             .Where(g => !g.IsDeleted &&
                         g.MeasuredAtUtc <= now &&
                         (now - g.MeasuredAtUtc).TotalMinutes <= 30)
-            .OrderByDescending(g => g.MeasuredAtUtc)
+            .OrderByDescending(g => g.MeasuredAtUtc).ThenByDescending(g => g.UpdatedAtUtc)
             .FirstOrDefault();
 
         if (glucoseReadings is not null)
@@ -305,7 +321,7 @@
     private double CurrentIob() => InsulinOnBoard.Calculate(
         _items
             .Where(i => !i.IsDeleted && (int)InsulinType.Bolus == i.InsulinType)
-            .Select(i => (i.InjectedAtUtc, i.Units)),
+            .Select(i => (i.InjectedAtUtc, i.Units, i.ExtendedDurationHours)),
         DateTime.UtcNow,
         _diaHours);
 
@@ -331,7 +347,6 @@
 
         await Db.PutAsync("insulin", dto, pending: true);
         _items.Add(dto); CalcTotals();
-        _ = Sync.SyncAsync();
 
         if (_scheduleReminder)
         {
@@ -342,24 +357,29 @@
                 "Контроль после укола",
                 null, null, false,
                 DateTime.UtcNow, false);
-            await Db.PutAsync("planned_events", reminder, pending: false);
+            await Db.PutAsync("planned_events", reminder, pending: true);
         }
 
         if (EventId.HasValue && _linkedEvent is not null)
         {
             await Db.PutAsync("planned_events",
                 _linkedEvent with { IsDone = true, UpdatedAtUtc = DateTime.UtcNow },
-                pending: false);
+                pending: true);
+            // Sync only after every pending write above, otherwise the fire-and-forget
+            // batch can miss the reminder / IsDone update written after it.
+            _ = Sync.SyncAsync();
             Nav.NavigateTo("/calendar");
             return;
         }
 
         if (Alert == 1)
         {
+            _ = Sync.SyncAsync();
             Nav.NavigateTo("/calendar");
             return;
         }
 
+        _ = Sync.SyncAsync();
         _showForm = false; _units = 1; _carbs = 0; _glucoseBefore = 0; _scheduleReminder = false;
     }
 
@@ -374,14 +394,27 @@
         var deleted = item with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow };
         await Db.PutAsync("insulin", deleted, pending: true);
         _items.RemoveAll(i => i.Id == id); CalcTotals();
+        // Revert the planned event back to "not done" so the diary doesn't keep showing it as
+        // completed with no value once the record that fulfilled it is gone.
+        await RevertLinkedEventAsync(item.LinkedEventId, isDone: false);
         _ = Sync.SyncAsync();
 
         Undo.Push($"Удалено: {label}", async () =>
         {
             await Db.PutAsync("insulin", item with { UpdatedAtUtc = DateTime.UtcNow }, pending: true);
             _items.Add(item); CalcTotals();
+            await RevertLinkedEventAsync(item.LinkedEventId, isDone: true);
             _ = Sync.SyncAsync();
             await InvokeAsync(StateHasChanged);
         });
+    }
+
+    private async Task RevertLinkedEventAsync(Guid? linkedEventId, bool isDone)
+    {
+        if (linkedEventId is null) return;
+        var events = await Db.GetAllAsync<PlannedEventDto>("planned_events");
+        var ev = events.FirstOrDefault(e => e.Id == linkedEventId.Value && !e.IsDeleted);
+        if (ev is not null)
+            await Db.PutAsync("planned_events", ev with { IsDone = isDone, UpdatedAtUtc = DateTime.UtcNow }, pending: true);
     }
 }

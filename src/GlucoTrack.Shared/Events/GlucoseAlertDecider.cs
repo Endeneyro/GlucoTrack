@@ -1,3 +1,4 @@
+using GlucoTrack.Shared.Calculations;
 using GlucoTrack.Shared.DTOs.Sync;
 using GlucoTrack.Shared.Entities;
 
@@ -30,23 +31,48 @@ public static class GlucoseAlertDecider
         DateTime nowUtc,
         double criticalMmol = CriticalGlucoseMmol,
         double recentBolusHours = 2,
-        double pendingWindowMinutes = 120)
+        double pendingWindowMinutes = 120,
+        double? correctionTarget = null,
+        double? insulinSensitivityFactor = null,
+        double diaHours = InsulinOnBoard.DefaultDiaHours)
     {
         if (latestGlucose <= targetHigh)
             return new GlucoseAlert(GlucoseAlertKind.None, latestGlucose, null);
 
-        // Уже введённый болюс в пределах recentBolusHours покрывает коррекцию — алерт не нужен.
-        var recentBolus = injections.Any(i =>
-            !i.IsDeleted &&
-            (InsulinType)i.InsulinType == InsulinType.Bolus &&
-            (nowUtc - i.InjectedAtUtc).TotalHours <= recentBolusHours &&
-            (nowUtc - i.InjectedAtUtc).TotalHours >= 0);
-        if (recentBolus)
-            return new GlucoseAlert(GlucoseAlertKind.None, latestGlucose, null);
+        var bolusInjections = injections
+            .Where(i => !i.IsDeleted && i.Units > 0 && (InsulinType)i.InsulinType == InsulinType.Bolus)
+            .Select(i => (i.InjectedAtUtc, i.Units, i.ExtendedDurationHours));
 
-        // Критически высокий — приоритет над «свернуть в плановый болюс».
+        // Точный расчёт покрытия по активному инсулину (если заданы коэффициенты терапии):
+        // сравниваем IOB с дозой, которая реально нужна, чтобы снизить текущий сахар до цели.
+        bool preciseCoverage = correctionTarget is > 0 && insulinSensitivityFactor is > 0;
+        if (preciseCoverage)
+        {
+            var iob = InsulinOnBoard.Calculate(bolusInjections, nowUtc, diaHours);
+            var neededCorrection = (latestGlucose - correctionTarget!.Value) / insulinSensitivityFactor!.Value;
+            // Уже введённая коррекция покрывает нужную дозу — гасим алерт, в т.ч. критический:
+            // повторный укол поверх достаточного IOB опаснее (стэкинг → отложенная гипогликемия),
+            // чем ожидание действия уже введённого инсулина. Если же IOB не покрывает (доза
+            // оказалась мала, а сахар критический) — алерт ниже всё равно сработает.
+            if (iob >= neededCorrection)
+                return new GlucoseAlert(GlucoseAlertKind.None, latestGlucose, null);
+        }
+
+        // Критически высокий — пробивает грубую блокировку по времени и предстоящий плановый
+        // болюс: без коэффициентов терапии нельзя достоверно оценить, покрыл ли недавний болюс
+        // рост сахара, а риск молчания (DKA, кетоацидоз) выше риска ложного предупреждения.
         if (latestGlucose >= criticalMmol)
             return new GlucoseAlert(GlucoseAlertKind.Critical, latestGlucose, null);
+
+        // Не критический высокий без коэффициентов — грубый фоллбэк по времени:
+        // недавний болюс (в пределах recentBolusHours) считаем достаточным покрытием.
+        if (!preciseCoverage)
+        {
+            var recentBolus = bolusInjections.Any(b =>
+                (nowUtc - b.InjectedAtUtc).TotalHours >= 0 && (nowUtc - b.InjectedAtUtc).TotalHours <= recentBolusHours);
+            if (recentBolus)
+                return new GlucoseAlert(GlucoseAlertKind.None, latestGlucose, null);
+        }
 
         // Незавершённый плановый болюс рядом — коррекция учтётся в нём, отдельную не предлагаем.
         var pendingBolus = plannedEvents

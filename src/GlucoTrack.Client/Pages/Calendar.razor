@@ -11,7 +11,14 @@
 
 <PageTitle>Календарь — GlucoTrack</PageTitle>
 
-<div style="max-width:860px">
+<div class="calendar-page">
+    <!-- ── Header ──────────────────────────────────────────────────── -->
+    <div style="margin-bottom:1.25rem">
+        <h2 style="margin:0;font-size:1.35rem;font-weight:700;color:var(--c-text)">Календарь</h2>
+        <p style="margin:.15rem 0 0;font-size:.85rem;color:var(--c-text-muted)">Дневник и план событий по дням</p>
+    </div>
+
+  <div style="max-width:860px;margin:0 auto">
     <!-- Month navigation -->
     <div class="home-date-bar" style="justify-content:space-between">
         <button class="btn btn-ghost btn-icon" @onclick="PrevMonth">‹</button>
@@ -22,8 +29,11 @@
     <!-- Calendar grid -->
     <div class="cal-grid">
         <div class="cal-dow">
-            @foreach (var h in _dayHeaders)
-            { <div class="cal-dow-cell">@h</div> }
+            @for (var i = 0; i < _dayHeaders.Length; i++)
+            {
+                var isWeekendHeader = i == 5 || i == 6;
+                <div class="cal-dow-cell@(isWeekendHeader ? " cal-dow-cell-weekend" : "")">@_dayHeaders[i]</div>
+            }
         </div>
         <div class="cal-days">
             @foreach (var day in _calDays)
@@ -32,14 +42,25 @@
                 var isSelected = day == _selected;
                 var inMonth    = day.Month == _month.Month;
                 var hasPlan    = _eventsByDate.ContainsKey(day);
+                var isWeekend  = day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
                 var cls = "cal-day" +
                           (isToday    ? " cal-day-today"    : "") +
                           (isSelected ? " cal-day-selected" : "") +
-                          (!inMonth   ? " cal-day-other-month" : "");
+                          (!inMonth   ? " cal-day-other-month" : "") +
+                          (isWeekend  ? " cal-day-weekend"   : "");
                 <div class="@cls" @onclick="() => SelectDay(day)">
                     <div class="cal-day-num">@day.Day</div>
-                    @if (hasPlan && inMonth)
-                    { <div class="cal-dots"><div class="cal-dot planned"></div></div> }
+                    @if (inMonth)
+                    {
+                        <div class="cal-dots">
+                            @if (hasPlan)
+                            {
+                                var types = _eventsByDate[day].Select(e => (PlannedEventType)e.EventType).Distinct().OrderBy(t => (int)t);
+                                @foreach (var t in types)
+                                { <div class="cal-dot @EventDotClass(t)"></div> }
+                            }
+                        </div>
+                    }
                 </div>
             }
         </div>
@@ -98,7 +119,7 @@
             @if (allItems.Count == 0)
             {
                 <div style="padding:2rem 0;text-align:center;color:var(--c-text-muted)">
-                    <div style="font-size:2.5rem;margin-bottom:.5rem">📭</div>
+                    <img src="icons/diary.svg" style="width:7.5rem;height:7.5rem;margin-bottom:.5rem;opacity:.6" />
                     <div style="font-size:.875rem">В этот день ничего не записано</div>
                 </div>
             }
@@ -108,35 +129,35 @@
                     @foreach (var item in allItems)
                     {
                         var actionable = IsActionable(item);
-                        var itemCls = "diary-item" +
+                        var itemCls = "diary-item " + DiaryCardBgClass(item) +
                             (item.IsPlanned && !item.IsDone ? " diary-item-planned" : "") +
                             (item.IsDone    ? " diary-item-done" : "") +
                             (actionable     ? " diary-item-clickable" : "");
 
                         <div class="@itemCls" @onclick="() => OnDiaryItemClick(item)">
                             <div class="diary-item-time">@item.Time.ToString("HH:mm")</div>
-                            <div class="diary-item-icon">
-                                @if (item.Icon.EndsWith(".svg"))
-                                { <img src="@item.Icon" style="width:1.4rem;height:1.4rem" /> }
-                                else
-                                { @item.Icon }
+                            <div class="diary-item-icon @DiaryIconBgClass(item)">
+                                <span class="diary-icon @DiaryIconColorClass(item)"
+                                      style="-webkit-mask-image:url('@DiaryIconPath((PlannedEventType)item.EventType)');mask-image:url('@DiaryIconPath((PlannedEventType)item.EventType)')"></span>
                             </div>
                             <div class="diary-item-body">
                                 <div class="diary-item-title">@item.Title</div>
                                 @if (!string.IsNullOrEmpty(item.Sub))
                                 { <div class="diary-item-sub">@item.Sub</div> }
-                                @if (!string.IsNullOrEmpty(item.ResultText))
-                                {
-                                    <div style="font-size:.8rem;color:var(--c-success);font-weight:600;margin-top:.2rem">
-                                        ✓ @item.ResultText
-                                    </div>
-                                }
                             </div>
-                            @if (item.IsDone)
+                            @if (!string.IsNullOrEmpty(item.ResultText))
                             {
-                                <span style="font-size:1rem;color:var(--c-success)">✓</span>
+                                <div class="diary-item-result">✓ @item.ResultText</div>
                             }
-                            else if (item.IsPlanned && (PlannedEventType)item.EventType == PlannedEventType.Activity && actionable)
+                            @if (item.Protein.HasValue)
+                            {
+                                <div class="diary-item-macros">
+                                    <span class="macro-pill-sm macro-pill-sm-protein"><span>Б</span>@item.Protein.Value.ToString("F0")</span>
+                                    <span class="macro-pill-sm macro-pill-sm-fat"><span>Ж</span>@item.Fat!.Value.ToString("F0")</span>
+                                    <span class="macro-pill-sm macro-pill-sm-carbs"><span>У</span>@item.Carbs!.Value.ToString("F0")</span>
+                                </div>
+                            }
+                            @if (!item.IsDone && item.IsPlanned && (PlannedEventType)item.EventType == PlannedEventType.Activity && actionable)
                             {
                                 <button class="btn btn-ghost btn-sm" style="flex-shrink:0"
                                         @onclick:stopPropagation="true"
@@ -144,19 +165,13 @@
                                     Выполнено
                                 </button>
                             }
-                            else if (item.IsPlanned && !item.IsDone)
-                            {
-                                <span style="font-size:.72rem;padding:.2rem .5rem;border-radius:999px;background:var(--c-warning-light,#FEF3C7);color:#92400E;flex-shrink:0">
-                                    @(actionable ? "▶ нажмите" : "план")
-                                </span>
-                            }
                             @if (item.IsPlanned && item.EventId is not null)
                             {
-                                <button class="btn btn-ghost btn-icon btn-sm" style="flex-shrink:0;font-size:.85rem"
+                                <button class="diary-item-edit-btn"
                                         title="Редактировать"
                                         @onclick:stopPropagation="true"
                                         @onclick="() => OpenEditModal(item.EventId.Value)">
-                                    ✎
+                                    <img src="icons/edit.svg" width="18" height="18" />
                                 </button>
                             }
                         </div>
@@ -177,6 +192,7 @@
             </div>
         }
     </div>
+  </div>
 </div>
 
 <PlanModal Visible="_modalOpen" Date="_selected" EditEvent="_editEvent"
@@ -306,11 +322,18 @@
             {
                 var type = (PlannedEventType)ev.EventType;
                 string? resultText = null;
+                double? mealProt = null, mealFat = null, mealCarbs = null;
 
                 if (ev.IsDone)
                 {
                     var evLocal = ev.PlannedAtUtc.ToLocalTime();
-                    if (type == PlannedEventType.Glucose)
+                    if (type == PlannedEventType.Meal)
+                    {
+                        var totals = MealTotals(ev.MealItems ?? [], products);
+                        resultText = $"{totals.Kcal:F0} ккал";
+                        mealProt = totals.Protein; mealFat = totals.Fat; mealCarbs = totals.Carbs;
+                    }
+                    else if (type == PlannedEventType.Glucose)
                     {
                         var found = glucoseAll.FirstOrDefault(g => g.LinkedEventId == ev.Id)
                             ?? glucoseAll.Where(g => Math.Abs((g.MeasuredAtUtc.ToLocalTime() - evLocal).TotalMinutes) <= 15)
@@ -320,21 +343,25 @@
                     }
                     else if (type == PlannedEventType.Insulin)
                     {
-                        var found = insulinAll.FirstOrDefault(i => i.LinkedEventId == ev.Id)
-                            ?? insulinAll.Where(i => Math.Abs((i.InjectedAtUtc.ToLocalTime() - evLocal).TotalMinutes) <= 15)
+                        // Dual-wave болюс пишет две записи на одно событие — суммируем дозу,
+                        // иначе в результате отобразится только немедленная часть.
+                        var linked = insulinAll.Where(i => i.LinkedEventId == ev.Id).ToList();
+                        var found = linked.Count > 0
+                            ? linked.OrderBy(i => i.InjectedAtUtc).First()
+                            : insulinAll.Where(i => Math.Abs((i.InjectedAtUtc.ToLocalTime() - evLocal).TotalMinutes) <= 15)
                                          .OrderBy(i => Math.Abs((i.InjectedAtUtc.ToLocalTime() - evLocal).TotalMinutes))
                                          .FirstOrDefault();
                         if (found is not null)
                         {
+                            var totalUnits = linked.Count > 0 ? linked.Sum(i => i.Units) : found.Units;
                             var typeLabel = (GlucoTrack.Shared.Entities.InsulinType)found.InsulinType == GlucoTrack.Shared.Entities.InsulinType.Bolus ? "болюс" : "базал";
-                            resultText = $"{found.Units:F1} ЕД · {typeLabel}";
+                            resultText = $"{totalUnits:F1} ЕД · {typeLabel}";
                         }
                     }
                     else
                     {
                         resultText = type switch
                         {
-                            PlannedEventType.Meal     => "съедено",
                             PlannedEventType.Activity => "выполнено",
                             PlannedEventType.Weight   => "зафиксировано",
                             _ => null
@@ -355,9 +382,11 @@
                 }
 
                 _diaryItems.Add(new DiaryItem(
-                    ev.PlannedAtUtc.ToLocalTime(), PlannedEventMeta.Icon(type),
+                    ev.PlannedAtUtc.ToLocalTime(),
                     PlannedEventMeta.Label(type), sub,
-                    true, ev.IsDone, ev.Id, (int)type, resultText));
+                    true, ev.IsDone, ev.Id, (int)type, resultText,
+                    IsInsulinBolus: type == PlannedEventType.Insulin ? (ev.InsulinSubtype ?? 0) == 0 : null,
+                    Protein: mealProt, Fat: mealFat, Carbs: mealCarbs));
             }
         }
 
@@ -382,14 +411,16 @@
         foreach (var group in mealsByTime)
         {
             var items = group.ToList();
-            double totalKcal = 0;
+            var totals = MealTotals(
+                items.Select(m => new PlannedMealItem(m.ProductId, "", m.Grams,
+                    products.TryGetValue(m.ProductId, out var pm) ? pm.MeasureType : 0,
+                    pm?.PieceWeightG)),
+                products);
             var parts = new List<string>();
 
             foreach (var m in items)
             {
                 products.TryGetValue(m.ProductId, out var p);
-                var effG = p is null ? m.Grams : NutritionMath.EffectiveGrams(p.MeasureType, m.Grams, p.PieceWeightG);
-                totalKcal += p is null ? 0 : p.CaloriesPer100g * effG / 100.0;
                 var portion = p?.MeasureType == 1 ? $"{m.Grams:F0} шт" : $"{m.Grams:F0} г";
                 parts.Add($"{p?.Name ?? "Продукт"} {portion}");
             }
@@ -399,34 +430,26 @@
             {
                 products.TryGetValue(items[0].ProductId, out var sp);
                 title = sp?.Name ?? "Продукт";
-                var effG = sp is null ? items[0].Grams : NutritionMath.EffectiveGrams(sp.MeasureType, items[0].Grams, sp.PieceWeightG);
-                var portion = sp?.MeasureType == 1 ? $"{items[0].Grams:F0} шт" : $"{items[0].Grams:F0} г";
-                sub = $"{portion} · {totalKcal:F0} ккал";
+                sub = sp?.MeasureType == 1 ? $"{items[0].Grams:F0} шт" : $"{items[0].Grams:F0} г";
             }
             else
             {
-                title = $"Приём пищи · {totalKcal:F0} ккал";
+                title = "Приём пищи";
                 sub = string.Join(" · ", parts);
             }
 
-            var mealIcon = (GlucoTrack.Shared.Entities.MealType)items[0].MealType switch
-            {
-                GlucoTrack.Shared.Entities.MealType.Breakfast => "icons/breakfast.svg",
-                GlucoTrack.Shared.Entities.MealType.Lunch     => "icons/lunch.svg",
-                GlucoTrack.Shared.Entities.MealType.Dinner    => "icons/dinner.svg",
-                _                                             => "icons/snack.svg"
-            };
             _diaryItems.Add(new DiaryItem(
-                _selected.ToDateTime(group.Key), mealIcon,
-                title, sub, false, true, null, -1, null));
+                _selected.ToDateTime(group.Key),
+                title, sub, false, true, null, (int)PlannedEventType.Meal, $"{totals.Kcal:F0} ккал",
+                Protein: totals.Protein, Fat: totals.Fat, Carbs: totals.Carbs));
         }
 
         // Real glucose (skip records already shown via done planned events)
         foreach (var g in glucoseAll.Where(g => !doneGlucoseIds.Contains(g.Id)))
             _diaryItems.Add(new DiaryItem(
-                g.MeasuredAtUtc.ToLocalTime(), "📈",
+                g.MeasuredAtUtc.ToLocalTime(),
                 $"{g.ValueMmol:F1} ммоль/л", null,
-                false, true, null, -1, null));
+                false, true, null, (int)PlannedEventType.Glucose, null));
 
         // Real insulin (skip records already shown via done planned events)
         foreach (var ins in insulinAll.Where(i => !doneInsulinIds.Contains(i.Id)))
@@ -434,9 +457,9 @@
             var isBolus = (GlucoTrack.Shared.Entities.InsulinType)ins.InsulinType == GlucoTrack.Shared.Entities.InsulinType.Bolus;
             _diaryItems.Add(new DiaryItem(
                 ins.InjectedAtUtc.ToLocalTime(),
-                isBolus ? "💉" : "🩺",
                 isBolus ? $"Болюс {ins.Units:F1} ЕД" : $"Базал {ins.Units:F1} ЕД",
-                null, false, true, null, -1, null));
+                null, false, true, null, (int)PlannedEventType.Insulin, null,
+                IsInsulinBolus: isBolus));
         }
 
         // High-glucose alert — решение вынесено в тестируемый GlucoseAlertDecider.
@@ -447,12 +470,25 @@
         {
             var settings = (await Db.GetAllAsync<UserSettingsDto>("settings")).FirstOrDefault();
             double target = settings?.TargetGlucoseHigh ?? 10.0;
-            var latest = glucoseAll.OrderByDescending(g => g.MeasuredAtUtc).First();
+            // MeasuredAtUtc can tie (same-minute entries) — UpdatedAtUtc (real save time) breaks
+            // the tie deterministically, so the truly last-entered reading wins.
+            var latest = glucoseAll.OrderByDescending(g => g.MeasuredAtUtc).ThenByDescending(g => g.UpdatedAtUtc).First();
             // Pass latest glucose to PlanModal for dynamic pre-bolus timing (only if recent ≤2h)
             if ((DateTime.UtcNow - latest.MeasuredAtUtc).TotalHours <= 2)
                 _lastGlucose = latest.ValueMmol;
             var allEvents = _eventsByDate.Values.SelectMany(v => v);
-            var alert = GlucoseAlertDecider.Decide(latest.ValueMmol, target, insulinAll, allEvents, DateTime.UtcNow);
+
+            // Коэффициенты терапии для текущего времени суток — чтобы алерт умел сравнивать
+            // активный инсулин (IOB) с реально нужной коррекцией, а не просто гасить алерт
+            // по факту «болюс был недавно».
+            var coeffs = (await Db.GetAllAsync<TherapyCoeffDto>("therapy")).Where(c => !c.IsDeleted).ToList();
+            var nowTime = TimeOnly.FromDateTime(DateTime.Now);
+            var coeff = coeffs.FirstOrDefault(c => c.CoversTime(nowTime)) ?? coeffs.FirstOrDefault();
+
+            var alert = GlucoseAlertDecider.Decide(latest.ValueMmol, target, insulinAll, allEvents, DateTime.UtcNow,
+                correctionTarget: settings?.TargetGlucose,
+                insulinSensitivityFactor: coeff?.InsulinSensitivityFactor,
+                diaHours: settings?.DiaHours > 0 ? settings.DiaHours : GlucoTrack.Shared.Calculations.InsulinOnBoard.DefaultDiaHours);
             switch (alert.Kind)
             {
                 case GlucoseAlertKind.Critical:
@@ -505,7 +541,7 @@
         if (ev is not null)
             await Db.PutAsync("planned_events",
                 ev with { IsDone = true, UpdatedAtUtc = DateTime.UtcNow },
-                pending: false);
+                pending: true);
         // Reload full data (not just the diary): the dedup that hides a real meal entry
         // behind its done planned event relies on _eventsByDate, which is rebuilt here.
         await LoadDataAsync();
@@ -517,6 +553,15 @@
         // Find nearest planned meal event within 90 min after this insulin event
         var allEvents = await Db.GetAllAsync<PlannedEventDto>("planned_events");
         var insulinEv = allEvents.FirstOrDefault(e => e.Id == insulinEventId);
+
+        // Базал не считается через калькулятор болюса (нет дозы на еду/коррекцию) и не должен
+        // записываться болюсом — ведём в ручную форму журнала, которая учитывает InsulinSubtype.
+        if ((insulinEv?.InsulinSubtype ?? 0) == 1)
+        {
+            Nav.NavigateTo($"/insulin?eventId={insulinEventId}");
+            return;
+        }
+
         var insulinTime = insulinEv?.PlannedAtUtc ?? DateTime.UtcNow;
 
         var mealEv = allEvents
@@ -563,6 +608,16 @@
         _ = LoadDiaryAsync().ContinueWith(_ => InvokeAsync(StateHasChanged));
     }
 
+    private static string EventDotClass(PlannedEventType type) => type switch
+    {
+        PlannedEventType.Meal     => "meal",
+        PlannedEventType.Glucose  => "glucose",
+        PlannedEventType.Insulin  => "insulin",
+        PlannedEventType.Weight   => "weight",
+        PlannedEventType.Activity => "activity",
+        _ => "meal"
+    };
+
     private void PrevMonth() { _month = _month.AddMonths(-1); BuildCalendarDays(); }
     private void NextMonth() { _month = _month.AddMonths(1); BuildCalendarDays(); }
 
@@ -605,7 +660,46 @@
     }
 
     private record DiaryItem(
-        DateTime Time, string Icon, string Title, string? Sub,
+        DateTime Time, string Title, string? Sub,
         bool IsPlanned, bool IsDone,
-        Guid? EventId, int EventType, string? ResultText);
+        Guid? EventId, int EventType, string? ResultText,
+        bool? IsInsulinBolus = null,
+        double? Protein = null, double? Fat = null, double? Carbs = null);
+
+    private static (double Kcal, double Protein, double Fat, double Carbs) MealTotals(
+        IEnumerable<PlannedMealItem> items, Dictionary<Guid, ProductDto> products)
+    {
+        double kcal = 0, prot = 0, fat = 0, carbs = 0;
+        foreach (var m in items)
+        {
+            if (!products.TryGetValue(m.ProductId, out var p)) continue;
+            var k = NutritionMath.EffectiveGrams(m.MeasureType, m.Grams, m.PieceWeightG) / 100.0;
+            kcal += p.CaloriesPer100g * k; prot += p.ProteinPer100g * k;
+            fat  += p.FatPer100g * k;      carbs += p.CarbsPer100g * k;
+        }
+        return (kcal, prot, fat, carbs);
+    }
+
+    private static string DiaryIconPath(PlannedEventType t) => t switch
+    {
+        PlannedEventType.Meal     => "icons/meals.svg",
+        PlannedEventType.Glucose  => "icons/glucometer.svg",
+        PlannedEventType.Insulin  => "icons/insulin.svg",
+        PlannedEventType.Weight   => "icons/weighing.svg",
+        PlannedEventType.Activity => "icons/training.svg",
+        _ => "icons/meals.svg"
+    };
+
+    private static string DiaryIconColorClass(DiaryItem item) => (PlannedEventType)item.EventType switch
+    {
+        PlannedEventType.Meal     => "diary-icon-meal",
+        PlannedEventType.Glucose  => "diary-icon-glucose",
+        PlannedEventType.Insulin  => item.IsInsulinBolus == false ? "diary-icon-insulin-basal" : "diary-icon-insulin-bolus",
+        PlannedEventType.Weight   => "diary-icon-weight",
+        PlannedEventType.Activity => "diary-icon-activity",
+        _ => "diary-icon-meal"
+    };
+
+    private static string DiaryIconBgClass(DiaryItem item) => "diary-icon-bg-" + DiaryIconColorClass(item)["diary-icon-".Length..];
+    private static string DiaryCardBgClass(DiaryItem item) => "diary-card-bg-" + DiaryIconColorClass(item)["diary-icon-".Length..];
 }

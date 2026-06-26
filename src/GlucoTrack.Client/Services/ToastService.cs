@@ -74,7 +74,7 @@ public class ToastService : IAsyncDisposable
         var events = await _db.GetAllAsync<PlannedEventDto>("planned_events");
         var ev = events.FirstOrDefault(e => e.Id == eventId);
         if (ev is not null)
-            await _db.PutAsync("planned_events", ev with { IsDone = true, UpdatedAtUtc = DateTime.UtcNow }, pending: false);
+            await _db.PutAsync("planned_events", ev with { IsDone = true, UpdatedAtUtc = DateTime.UtcNow }, pending: true);
         Dismiss(eventId);
     }
 

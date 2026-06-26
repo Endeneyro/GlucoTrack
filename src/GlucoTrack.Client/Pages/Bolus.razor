@@ -333,7 +333,7 @@
             var events = await Db.GetAllAsync<PlannedEventDto>("planned_events");
             var ev = events.FirstOrDefault(e => e.Id == linkedEventId.Value);
             if (ev is not null)
-                await Db.PutAsync("planned_events", ev with { IsDone = true, UpdatedAtUtc = DateTime.UtcNow }, pending: false);
+                await Db.PutAsync("planned_events", ev with { IsDone = true, UpdatedAtUtc = DateTime.UtcNow }, pending: true);
         }
 
         _ = Sync.SyncAsync();

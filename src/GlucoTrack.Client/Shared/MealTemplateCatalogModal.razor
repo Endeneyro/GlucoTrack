@@ -1,0 +1,88 @@
+@using GlucoTrack.Shared.DTOs.Sync
+@using GlucoTrack.Shared.Events
+
+<div class="modal-backdrop">
+    <div class="modal-card modal-card-wide" @onclick:stopPropagation style="max-width:640px">
+        <div class="modal-header">
+            <span class="modal-title">Выбор меню</span>
+            <button class="modal-close" @onclick="() => OnClose.InvokeAsync()">✕</button>
+        </div>
+
+        <div class="form-group" style="margin-bottom:.75rem">
+            <input class="form-control" type="text" placeholder="Поиск по названию..."
+                   @bind="_search" @oninput="OnSearchInput" autofocus />
+        </div>
+
+        <div style="max-height:55vh;overflow-y:auto;display:flex;flex-direction:column;gap:.5rem">
+            @{
+                var filtered = Templates
+                    .Where(t => !t.IsDeleted && (string.IsNullOrWhiteSpace(_search) ||
+                        t.Name.Contains(_search, StringComparison.OrdinalIgnoreCase)))
+                    .OrderBy(t => t.Name).ToList();
+            }
+            @if (filtered.Count == 0)
+            {
+                <div style="text-align:center;padding:2rem;color:var(--c-text-muted)">
+                    @(Templates.Count == 0 ? "Нет шаблонов меню" : "Ничего не найдено")
+                </div>
+            }
+            else
+            {
+                @foreach (var tpl in filtered)
+                {
+                    var kcal = TplKcal(tpl);
+                    <div class="home-card product-row-clickable" style="padding:.65rem 1rem" @onclick="() => SelectAndClose(tpl)">
+                        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:.6rem">
+                            <div class="product-cat-icon" style="flex-shrink:0">
+                                @if (tpl.HasImage)
+                                {
+                                    <img src="@TplImageUrl(tpl)" alt="" width="48" height="48" style="border-radius:50%;object-fit:cover"
+                                         onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" />
+                                }
+                                <div class="product-cat-icon" style="display:@(tpl.HasImage ? "none" : "flex")">
+                                    <img src="icons/templates.svg" width="28" height="28" />
+                                </div>
+                            </div>
+                            <div class="product-name-cell" style="flex:1 1 140px;min-width:0">
+                                <span class="product-row-name">@tpl.Name</span>
+                                <span class="product-row-mfr">@tpl.Items.Count поз.</span>
+                            </div>
+                            <div class="product-row-num" style="flex-shrink:0;min-width:64px;text-align:center">@kcal.ToString("F0") ккал</div>
+                        </div>
+                    </div>
+                }
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public List<MealTemplateDto> Templates { get; set; } = [];
+    [Parameter] public List<ProductDto> Products { get; set; } = [];
+    [Parameter] public EventCallback<MealTemplateDto> OnSelect { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private string _search = "";
+
+    private void OnSearchInput(ChangeEventArgs e) => _search = e.Value?.ToString() ?? "";
+
+    private double TplKcal(MealTemplateDto tpl)
+    {
+        double total = 0;
+        foreach (var i in tpl.Items)
+        {
+            var p = Products.FirstOrDefault(x => x.Id == i.ProductId);
+            if (p is null) continue;
+            total += p.CaloriesPer100g * NutritionMath.EffectiveGrams(p.MeasureType, i.Grams, p.PieceWeightG) / 100.0;
+        }
+        return total;
+    }
+
+    private static string TplImageUrl(MealTemplateDto t) => $"/api/meal-templates/{t.Id}/image?v={t.UpdatedAtUtc.Ticks}";
+
+    private async Task SelectAndClose(MealTemplateDto tpl)
+    {
+        await OnSelect.InvokeAsync(tpl);
+        await OnClose.InvokeAsync();
+    }
+}

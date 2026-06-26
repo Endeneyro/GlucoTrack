@@ -396,7 +396,7 @@ else
 
         _todayGlucose = (await Db.GetAllAsync<GlucoseReadingDto>("glucose"))
             .Where(g => !g.IsDeleted && g.MeasuredAtUtc >= DateTime.UtcNow.Date)
-            .OrderBy(g => g.MeasuredAtUtc).ToList();
+            .OrderBy(g => g.MeasuredAtUtc).ThenBy(g => g.UpdatedAtUtc).ToList();
 
         // Mini-calendar — build days and load glucose for current month
         BuildMiniCal();

@@ -7,6 +7,7 @@
 @inject HttpClient Http
 @inject IJSRuntime JS
 @inject ConnectivityService Connectivity
+@inject Microsoft.AspNetCore.Components.Authorization.AuthenticationStateProvider AuthState
 
 <PageTitle>Продукты — GlucoTrack</PageTitle>
 
@@ -28,7 +29,7 @@
             {
                 <button class="btn btn-primary" @onclick="OpenTemplateCreate">+ Новый шаблон</button>
             }
-            else if (_viewMode == 0)
+            else
             {
                 <button class="btn btn-primary" @onclick="OpenAdd">+ Добавить продукт</button>
             }
@@ -159,10 +160,10 @@
                                     </td>
                                     <td class="product-row-num">@tplKcal.ToString("F0") ккал</td>
                                     <td>
-                                        <div style="display:flex;flex-direction:column;gap:0;line-height:1.15;font-size:.78rem;font-variant-numeric:tabular-nums;white-space:nowrap">
-                                            <span><span style="display:inline-block;width:.9rem;color:var(--c-protein);font-size:.68rem;font-weight:600">Б</span>@tplProt.ToString("F1")</span>
-                                            <span><span style="display:inline-block;width:.9rem;color:var(--c-fat);font-size:.68rem;font-weight:600">Ж</span>@tplFat.ToString("F1")</span>
-                                            <span><span style="display:inline-block;width:.9rem;color:var(--c-carbs);font-size:.68rem;font-weight:600">У</span>@tplCarbs.ToString("F1")</span>
+                                        <div style="display:flex;flex-direction:column;align-items:flex-start;gap:.15rem;font-variant-numeric:tabular-nums">
+                                            <span class="macro-pill-sm macro-pill-sm-protein"><span>Б</span>@tplProt.ToString("F1")</span>
+                                            <span class="macro-pill-sm macro-pill-sm-fat"><span>Ж</span>@tplFat.ToString("F1")</span>
+                                            <span class="macro-pill-sm macro-pill-sm-carbs"><span>У</span>@tplCarbs.ToString("F1")</span>
                                         </div>
                                     </td>
                                     <td @onclick:stopPropagation>
@@ -298,22 +299,34 @@
                                 </td>
                                 <td class="product-row-num">@p.CaloriesPer100g.ToString("F0") ккал</td>
                                 <td>
-                                    <div style="display:flex;flex-direction:column;gap:0;line-height:1.15;font-size:.78rem;font-variant-numeric:tabular-nums;white-space:nowrap">
-                                        <span><span style="display:inline-block;width:.9rem;color:var(--c-protein);font-size:.68rem;font-weight:600">Б</span>@p.ProteinPer100g.ToString("F1")</span>
-                                        <span><span style="display:inline-block;width:.9rem;color:var(--c-fat);font-size:.68rem;font-weight:600">Ж</span>@p.FatPer100g.ToString("F1")</span>
-                                        <span><span style="display:inline-block;width:.9rem;color:var(--c-carbs);font-size:.68rem;font-weight:600">У</span>@p.CarbsPer100g.ToString("F1")</span>
+                                    <div style="display:flex;flex-direction:column;align-items:flex-start;gap:.15rem;font-variant-numeric:tabular-nums">
+                                        <span class="macro-pill-sm macro-pill-sm-protein"><span>Б</span>@p.ProteinPer100g.ToString("F1")</span>
+                                        <span class="macro-pill-sm macro-pill-sm-fat"><span>Ж</span>@p.FatPer100g.ToString("F1")</span>
+                                        <span class="macro-pill-sm macro-pill-sm-carbs"><span>У</span>@p.CarbsPer100g.ToString("F1")</span>
                                     </div>
                                 </td>
                                 <td>
                                     <div class="product-row-actions">
-                                        <button class="row-action-btn"
-                                                title="@(item.MyReaction == 1 ? "Убрать из избранного" : "В избранное")"
-                                                @onclick="() => ToggleRemoteFavoriteAsync(item)">
-                                            <img src="icons/@(item.MyReaction == 1 ? "starFav" : "star").svg" width="20" height="20" />
-                                        </button>
-                                        <button class="row-action-btn" title="Скрыть" @onclick="() => HideProductAsync(p.Id)">
-                                            <img src="icons/unshow.svg" width="18" height="18" />
-                                        </button>
+                                        @if (_viewMode == 4 && _isAdmin)
+                                        {
+                                            <button class="row-action-btn" title="Редактировать" @onclick="() => OpenEdit(p)">
+                                                <img src="icons/edit.svg" width="18" height="18" />
+                                            </button>
+                                            <button class="row-action-btn" title="Удалить" @onclick="() => _pendingDelete = p">
+                                                <img src="icons/deleted.svg" width="18" height="18" />
+                                            </button>
+                                        }
+                                        else
+                                        {
+                                            <button class="row-action-btn"
+                                                    title="@(item.MyReaction == 1 ? "Убрать из избранного" : "В избранное")"
+                                                    @onclick="() => ToggleRemoteFavoriteAsync(item)">
+                                                <img src="icons/@(item.MyReaction == 1 ? "starFav" : "star").svg" width="20" height="20" />
+                                            </button>
+                                            <button class="row-action-btn" title="Скрыть" @onclick="() => HideProductAsync(p.Id)">
+                                                <img src="icons/unshow.svg" width="18" height="18" />
+                                            </button>
+                                        }
                                     </div>
                                 </td>
                             </tr>
@@ -389,10 +402,10 @@
                                     </td>
                                     <td class="product-row-num">@p.CaloriesPer100g.ToString("F0") ккал</td>
                                     <td>
-                                        <div style="display:flex;flex-direction:column;gap:0;line-height:1.15;font-size:.78rem;font-variant-numeric:tabular-nums;white-space:nowrap">
-                                            <span><span style="display:inline-block;width:.9rem;color:var(--c-protein);font-size:.68rem;font-weight:600">Б</span>@p.ProteinPer100g.ToString("F1")</span>
-                                            <span><span style="display:inline-block;width:.9rem;color:var(--c-fat);font-size:.68rem;font-weight:600">Ж</span>@p.FatPer100g.ToString("F1")</span>
-                                            <span><span style="display:inline-block;width:.9rem;color:var(--c-carbs);font-size:.68rem;font-weight:600">У</span>@p.CarbsPer100g.ToString("F1")</span>
+                                        <div style="display:flex;flex-direction:column;align-items:flex-start;gap:.15rem;font-variant-numeric:tabular-nums">
+                                            <span class="macro-pill-sm macro-pill-sm-protein"><span>Б</span>@p.ProteinPer100g.ToString("F1")</span>
+                                            <span class="macro-pill-sm macro-pill-sm-fat"><span>Ж</span>@p.FatPer100g.ToString("F1")</span>
+                                            <span class="macro-pill-sm macro-pill-sm-carbs"><span>У</span>@p.CarbsPer100g.ToString("F1")</span>
                                         </div>
                                     </td>
                                     <td>
@@ -494,10 +507,10 @@
                                 </td>
                                 <td class="product-row-num">@p.CaloriesPer100g.ToString("F0") ккал</td>
                                 <td>
-                                    <div style="display:flex;flex-direction:column;gap:0;line-height:1.15;font-size:.78rem;font-variant-numeric:tabular-nums;white-space:nowrap">
-                                        <span><span style="display:inline-block;width:.9rem;color:var(--c-protein);font-size:.68rem;font-weight:600">Б</span>@p.ProteinPer100g.ToString("F1")</span>
-                                        <span><span style="display:inline-block;width:.9rem;color:var(--c-fat);font-size:.68rem;font-weight:600">Ж</span>@p.FatPer100g.ToString("F1")</span>
-                                        <span><span style="display:inline-block;width:.9rem;color:var(--c-carbs);font-size:.68rem;font-weight:600">У</span>@p.CarbsPer100g.ToString("F1")</span>
+                                    <div style="display:flex;flex-direction:column;align-items:flex-start;gap:.15rem;font-variant-numeric:tabular-nums">
+                                        <span class="macro-pill-sm macro-pill-sm-protein"><span>Б</span>@p.ProteinPer100g.ToString("F1")</span>
+                                        <span class="macro-pill-sm macro-pill-sm-fat"><span>Ж</span>@p.FatPer100g.ToString("F1")</span>
+                                        <span class="macro-pill-sm macro-pill-sm-carbs"><span>У</span>@p.CarbsPer100g.ToString("F1")</span>
                                     </div>
                                 </td>
                                 <td @onclick:stopPropagation>
@@ -528,19 +541,46 @@
                                                     @if (p.MeasureType == 1 && p.PieceWeightG.HasValue)
                                                     { <span>Вес 1 шт: <b>@p.PieceWeightG.Value.ToString("F0")</b> г</span> }
                                                 </div>
-                                                @{ var micros = GetMicronutrients(p); }
-                                                @if (micros.Count > 0)
+                                                @{
+                                                    var vitamins = ProductNutritionInfo.GetVitamins(p);
+                                                    var macroEls = ProductNutritionInfo.GetMacroelements(p);
+                                                    var microEls = ProductNutritionInfo.GetMicroelements(p);
+                                                }
+                                                @if (vitamins.Count == 0 && macroEls.Count == 0 && microEls.Count == 0)
                                                 {
-                                                    <div style="display:flex;flex-wrap:wrap;gap:.5rem .9rem;color:var(--c-text-muted)">
-                                                        @foreach (var (label, value) in micros)
-                                                        {
-                                                            <span>@label: <b style="color:var(--c-text)">@value.ToString("F1")</b></span>
-                                                        }
-                                                    </div>
+                                                    <div style="color:var(--c-text-muted)">Подробных данных о витаминах и минералах нет.</div>
                                                 }
                                                 else
                                                 {
-                                                    <div style="color:var(--c-text-muted)">Подробных данных о витаминах и минералах нет.</div>
+                                                    <div class="nutrient-columns">
+                                                        <div>
+                                                            <div class="nutrient-column-title" style="color:#EA580C">Витамины</div>
+                                                            <div class="nutrient-column-body">
+                                                                @foreach (var n in vitamins)
+                                                                {
+                                                                    <span class="nutrient-pill" style="background:@(n.Color)22"><span>@n.Label</span>@n.Value.ToString("F1")</span>
+                                                                }
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <div class="nutrient-column-title" style="color:#2563EB">Макроэлементы</div>
+                                                            <div class="nutrient-column-body">
+                                                                @foreach (var n in macroEls)
+                                                                {
+                                                                    <span class="nutrient-pill" style="background:@(n.Color)22"><span>@n.Label</span>@n.Value.ToString("F1")</span>
+                                                                }
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <div class="nutrient-column-title" style="color:#9333EA">Микроэлементы</div>
+                                                            <div class="nutrient-column-body">
+                                                                @foreach (var n in microEls)
+                                                                {
+                                                                    <span class="nutrient-pill" style="background:@(n.Color)22"><span>@n.Label</span>@n.Value.ToString("F1")</span>
+                                                                }
+                                                            </div>
+                                                        </div>
+                                                    </div>
                                                 }
                                             </div>
                                         </div>
@@ -800,7 +840,7 @@
                             </div>
                         </div>
 
-                        <p class="nutrition-section-title" style="color:#3B82F6">Витамины</p>
+                        <p class="nutrient-section-pill nutrient-section-pill-vitamins">Витамины</p>
                         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem">
                             <div class="form-group"><label style="font-size:.78rem">A (мг)</label><input class="form-control" type="number" min="0" step="0.01" @bind="_vitA" @bind:event="onchange" /></div>
                             <div class="form-group"><label style="font-size:.78rem">C (мг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_vitC" @bind:event="onchange" /></div>
@@ -817,7 +857,7 @@
                             <div class="form-group"><label style="font-size:.78rem">K (мкг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_vitK" @bind:event="onchange" /></div>
                             <div class="form-group"><label style="font-size:.78rem">H Биотин (мкг)</label><input class="form-control" type="number" min="0" step="0.1" @bind="_vitH" @bind:event="onchange" /></div>
                         </div>
-                        <p class="nutrition-section-title" style="color:#3B82F6">Макроэлементы (мг)</p>
+                        <p class="nutrient-section-pill nutrient-section-pill-macro">Макроэлементы (мг)</p>
                         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem">
                             <div class="form-group"><label style="font-size:.78rem">Калий K</label><input class="form-control" type="number" min="0" step="0.1" @bind="_potassium" @bind:event="onchange" /></div>
                             <div class="form-group"><label style="font-size:.78rem">Натрий Na</label><input class="form-control" type="number" min="0" step="0.1" @bind="_sodium" @bind:event="onchange" /></div>
@@ -827,7 +867,7 @@
                             <div class="form-group"><label style="font-size:.78rem">Хлор Cl</label><input class="form-control" type="number" min="0" step="0.1" @bind="_chlorine" @bind:event="onchange" /></div>
                             <div class="form-group"><label style="font-size:.78rem">Сера S</label><input class="form-control" type="number" min="0" step="0.1" @bind="_sulfur" @bind:event="onchange" /></div>
                         </div>
-                        <p class="nutrition-section-title" style="color:#3B82F6">Микроэлементы</p>
+                        <p class="nutrient-section-pill nutrient-section-pill-micro">Микроэлементы</p>
                         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem">
                             <div class="form-group"><label style="font-size:.78rem">Железо Fe (мг)</label><input class="form-control" type="number" min="0" step="0.01" @bind="_iron" @bind:event="onchange" /></div>
                             <div class="form-group"><label style="font-size:.78rem">Цинк Zn (мг)</label><input class="form-control" type="number" min="0" step="0.01" @bind="_zinc" @bind:event="onchange" /></div>
@@ -1162,6 +1202,7 @@
 @code {
     // ── Data ──────────────────────────────────────────────────────────────────
     private bool _loading = true;
+    private bool _isAdmin;
     private List<ProductDto> _myProducts = [];
     private List<ProductDto> _allProducts = [];
     private List<ProductDto> _frequent = [];
@@ -1256,6 +1297,8 @@
     {
         await LoadMyProductsAsync();
         _ = LoadFavoriteIdsAsync();
+        var authState = await AuthState.GetAuthenticationStateAsync();
+        _isAdmin = authState.User.IsInRole("Admin");
     }
 
     private async Task LoadMyProductsAsync()
@@ -1569,6 +1612,11 @@
         {
             var idx = _myProducts.FindIndex(p => p.Id == dto.Id);
             if (idx >= 0) _myProducts[idx] = dto;
+
+            // Admin editing a base product from the "Базовые" tab — that row lives in
+            // _remoteItems (live search), not _myProducts, so patch it there too.
+            var remoteIdx = _remoteItems.FindIndex(x => x.Product.Id == dto.Id);
+            if (remoteIdx >= 0) _remoteItems[remoteIdx] = _remoteItems[remoteIdx] with { Product = dto };
         }
         _allProducts = _myProducts;
         _editId = Guid.Empty;
@@ -1584,6 +1632,7 @@
         _allProducts = _myProducts;
         _favoriteIds.Remove(p.Id);
         _localImageCache.Remove(p.Id);
+        _remoteItems.RemoveAll(x => x.Product.Id == p.Id);
 
         await Db.PutAsync("products", p with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow }, pending: true);
         _ = Sync.SyncAsync();
@@ -1803,9 +1852,6 @@
 
     private void ToggleTplExpand(Guid id) =>
         _expandedTplId = _expandedTplId == id ? null : id;
-
-    private static List<(string Label, double Value)> GetMicronutrients(ProductDto p) =>
-        ProductNutritionInfo.GetMicronutrients(p);
 
     // ── Meal Templates ────────────────────────────────────────────────────────
 

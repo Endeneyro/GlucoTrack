@@ -156,7 +156,7 @@
         {
             await Db.PutAsync("planned_events",
                 _linkedEvent with { IsDone = true, UpdatedAtUtc = DateTime.UtcNow },
-                pending: false);
+                pending: true);
             Nav.NavigateTo("/calendar");
             return;
         }
@@ -174,15 +174,28 @@
 
         await Db.PutAsync("glucose", item with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow }, pending: true);
         _readings.RemoveAll(r => r.Id == id); CalcStats();
+        // Revert the planned event back to "not done" so the diary doesn't keep showing it as
+        // completed with no value once the record that fulfilled it is gone.
+        await RevertLinkedEventAsync(item.LinkedEventId, isDone: false);
         _ = Sync.SyncAsync();
 
         Undo.Push($"Удалено: {label}", async () =>
         {
             await Db.PutAsync("glucose", item with { UpdatedAtUtc = DateTime.UtcNow }, pending: true);
             _readings.Add(item); CalcStats();
+            await RevertLinkedEventAsync(item.LinkedEventId, isDone: true);
             _ = Sync.SyncAsync();
             await InvokeAsync(StateHasChanged);
         });
+    }
+
+    private async Task RevertLinkedEventAsync(Guid? linkedEventId, bool isDone)
+    {
+        if (linkedEventId is null) return;
+        var events = await Db.GetAllAsync<PlannedEventDto>("planned_events");
+        var ev = events.FirstOrDefault(e => e.Id == linkedEventId.Value && !e.IsDeleted);
+        if (ev is not null)
+            await Db.PutAsync("planned_events", ev with { IsDone = isDone, UpdatedAtUtc = DateTime.UtcNow }, pending: true);
     }
 
     private string GlucoseClass(double v) => v < _gLow ? "g-low" : v > _gHigh ? "g-high" : "g-ok";

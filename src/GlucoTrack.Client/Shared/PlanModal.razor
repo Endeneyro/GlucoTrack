@@ -6,7 +6,7 @@
 
 @if (Visible)
 {
-    <div class="modal-backdrop" @onclick="OnBackdropClick">
+    <div class="modal-backdrop">
         <div class="modal-card" @onclick:stopPropagation="true">
             <div class="modal-header">
                 <div>
@@ -15,6 +15,8 @@
                 </div>
                 <button class="modal-close" @onclick="Close">✕</button>
             </div>
+
+            <div class="modal-scroll-content">
 
             <!-- Time Picker -->
             <div class="time-picker">
@@ -53,14 +55,19 @@
 
             <!-- Event type -->
             <div class="form-group">
-                <label>Тип события</label>
-                <select class="form-control" value="@((int)_type)" @onchange="OnTypeChanged">
-                    <option value="0">🍽 Приём пищи</option>
-                    <option value="1">📈 Измерение сахара</option>
-                    <option value="2">💊 Инсулин</option>
-                    <option value="3">⚖️ Взвешивание</option>
-                    <option value="4">🏃 Физическая активность</option>
-                </select>
+                <label style="display:block;text-align:center">@PlannedEventMeta.Label(_type)</label>
+                <div class="event-type-picker">
+                    @foreach (var t in _eventTypes)
+                    {
+                        var type = t;
+                        <button type="button"
+                                class="event-type-btn @EventTypeClass(type) @(type == _type ? "active" : "")"
+                                title="@PlannedEventMeta.Label(type)"
+                                @onclick="() => SelectType(type)">
+                            <span class="event-type-icon" style="-webkit-mask-image:url('icons/@EventTypeIcon(type)');mask-image:url('icons/@EventTypeIcon(type)')"></span>
+                        </button>
+                    }
+                </div>
             </div>
 
             <!-- Insulin subtype (only for Insulin type) -->
@@ -80,56 +87,6 @@
                 <label>Заметка (необязательно)</label>
                 <input class="form-control" type="text" placeholder="Например: после ужина" @bind="_note" />
             </div>
-
-            <!-- Meal items (only for Meal type) -->
-            @if (_type == PlannedEventType.Meal)
-            {
-                <div class="form-card" style="margin-bottom:.75rem">
-                    <h4>Продукты</h4>
-                    @foreach (var item in _mealItems)
-                    {
-                        var idx = _mealItems.IndexOf(item);
-                        var prod = _allProducts.FirstOrDefault(p => p.Id == item.ProductId);
-                        var byPiece = prod?.MeasureType == 1;
-                        <div class="home-card" style="padding:.4rem .65rem;margin-bottom:.5rem;display:flex;gap:.6rem;align-items:center">
-                            <div class="product-icon-cell" style="flex-shrink:0">
-                                @if (prod is { HasImage: true })
-                                {
-                                    <img src="@ProductCategories.ImageUrl(prod)" alt="" class="product-row-img"
-                                         onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" />
-                                }
-                                <div class="product-cat-icon" style="display:@(prod is { HasImage: true } ? "none" : "flex")">
-                                    <img src="icons/@(ProductCategories.IconName(prod?.Category ?? 0)).svg" />
-                                </div>
-                            </div>
-                            <div style="flex:1;min-width:0;font-size:.875rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">@item.ProductName</div>
-                            <input class="form-control" type="number" min="1" step="@(byPiece ? "1" : "5")" style="width:80px;flex-shrink:0"
-                                   value="@item.Grams"
-                                   @onchange="e => UpdateGrams(idx, double.TryParse(e.Value?.ToString(), out var g) ? g : item.Grams)" />
-                            <span style="font-size:.8rem;color:var(--c-text-muted);flex-shrink:0">@(byPiece ? "шт" : "г")</span>
-                            <button class="btn btn-ghost btn-icon btn-sm" style="flex-shrink:0" @onclick="() => _mealItems.RemoveAt(idx)">✕</button>
-                        </div>
-                    }
-
-                    <!-- Product search -->
-                    <div class="form-group" style="margin-bottom:.5rem">
-                        <div style="display:flex;gap:.5rem">
-                            <input class="form-control" type="text" placeholder="Поиск продукта..." style="flex:1"
-                                   @bind="_productSearch" @oninput="SearchProducts" />
-                            <button class="btn btn-ghost btn-sm" style="flex-shrink:0" @onclick="() => _showCatalog = true"><img src="icons/catalog.svg" width="32" height="32" /> Каталог</button>
-                        </div>
-                        @if (_searchResults.Count > 0)
-                        {
-                            <div class="search-results">
-                                @foreach (var p in _searchResults)
-                                {
-                                    <ProductSearchResultItem Product="p" OnClick="AddMealItem" />
-                                }
-                            </div>
-                        }
-                    </div>
-                </div>
-            }
 
             <!-- Insulin reminder suggestion (new meal events only) -->
             @if (_type == PlannedEventType.Meal && !IsEditMode && _mealItems.Count > 0)
@@ -177,7 +134,61 @@
 
             @if (_error is not null) { <div class="alert alert-error">@_error</div> }
 
-            <div style="display:flex;gap:.5rem;justify-content:space-between;align-items:center">
+            <!-- Meal items (only for Meal type) -->
+            @if (_type == PlannedEventType.Meal)
+            {
+                <div class="form-card" style="margin-bottom:.75rem">
+                    <h4>Продукты</h4>
+
+                    <!-- Product search -->
+                    <div class="form-group" style="margin-bottom:.5rem">
+                        <input class="form-control" type="text" placeholder="Поиск продукта..."
+                               @bind="_productSearch" @oninput="SearchProducts" />
+                        @if (_searchResults.Count > 0)
+                        {
+                            <div class="search-results">
+                                @foreach (var p in _searchResults)
+                                {
+                                    <ProductSearchResultItem Product="p" OnClick="AddMealItem" />
+                                }
+                            </div>
+                        }
+                        <div style="display:flex;gap:.5rem;margin-top:.5rem">
+                            <button class="btn btn-ghost btn-sm" style="flex:1" @onclick="() => _showCatalog = true"><img src="icons/catalog.svg" width="32" height="32" /> Каталог</button>
+                            <button class="btn btn-ghost btn-sm" style="flex:1" @onclick="() => _showMenuCatalog = true"><img src="icons/templates.svg" width="32" height="32" /> Меню</button>
+                        </div>
+                    </div>
+
+                    @foreach (var item in _mealItems)
+                    {
+                        var idx = _mealItems.IndexOf(item);
+                        var prod = _allProducts.FirstOrDefault(p => p.Id == item.ProductId);
+                        var byPiece = prod?.MeasureType == 1;
+                        <div class="home-card" style="padding:.4rem .65rem;margin-bottom:.5rem;display:flex;gap:.6rem;align-items:center">
+                            <div class="product-icon-cell" style="flex-shrink:0">
+                                @if (prod is { HasImage: true })
+                                {
+                                    <img src="@ProductCategories.ImageUrl(prod)" alt="" class="product-row-img"
+                                         onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" />
+                                }
+                                <div class="product-cat-icon" style="display:@(prod is { HasImage: true } ? "none" : "flex")">
+                                    <img src="icons/@(ProductCategories.IconName(prod?.Category ?? 0)).svg" />
+                                </div>
+                            </div>
+                            <div style="flex:1;min-width:0;font-size:.875rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">@item.ProductName</div>
+                            <input class="form-control" type="number" min="1" step="@(byPiece ? "1" : "5")" style="width:80px;flex-shrink:0"
+                                   value="@item.Grams"
+                                   @onchange="e => UpdateGrams(idx, double.TryParse(e.Value?.ToString(), out var g) ? g : item.Grams)" />
+                            <span style="font-size:.8rem;color:var(--c-text-muted);flex-shrink:0">@(byPiece ? "шт" : "г")</span>
+                            <button class="btn btn-ghost btn-icon btn-sm" style="flex-shrink:0" @onclick="() => _mealItems.RemoveAt(idx)">✕</button>
+                        </div>
+                    }
+                </div>
+            }
+
+            </div> @* /modal-scroll-content *@
+
+            <div style="display:flex;gap:.5rem;justify-content:space-between;align-items:center;flex-shrink:0;padding-top:.75rem">
                 <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_saving">
                     @(_saving ? "Сохранение..." : (IsEditMode ? "Сохранить изменения" : "Запланировать"))
                 </button>
@@ -199,6 +210,13 @@
                           OnClose="() => _showCatalog = false" />
 }
 
+@if (_showMenuCatalog)
+{
+    <MealTemplateCatalogModal Templates="_mealTemplates" Products="_allProducts"
+                               OnSelect="ApplyTemplate"
+                               OnClose="() => _showMenuCatalog = false" />
+}
+
 @code {
     [Parameter] public bool Visible { get; set; }
     [Parameter] public DateOnly Date { get; set; }
@@ -214,7 +232,7 @@
 
     private int _hour = DateTime.Now.Hour;
     private int _min  = (DateTime.Now.Minute / 5) * 5;
-    private PlannedEventType _type = PlannedEventType.Glucose;
+    private PlannedEventType _type = PlannedEventType.Meal;
     private int _insulinSubtype = 0; // 0=болюс, 1=базал
     private string _note = "";
     private string? _error;
@@ -227,11 +245,16 @@
     private string _productSearch = "";
     private bool _addInsulinReminder = true;
     private bool _showCatalog;
+    private bool _showMenuCatalog;
+    private List<MealTemplateDto> _mealTemplates = [];
 
     protected override async Task OnParametersSetAsync()
     {
         if (Visible && _allProducts.Count == 0)
             _allProducts = (await Db.GetAllAsync<ProductDto>("products")).Where(p => !p.IsDeleted).ToList();
+
+        if (Visible && _mealTemplates.Count == 0)
+            _mealTemplates = (await Db.GetAllAsync<MealTemplateDto>("meal_templates")).Where(t => !t.IsDeleted).ToList();
 
         if (Visible && EditEvent is not null)
         {
@@ -255,8 +278,33 @@
     private void DecrMin() => _min = (_min + 55) % 60;
     private void OnMinWheel(WheelEventArgs e) { if (e.DeltaY > 0) DecrMin(); else IncrMin(); }
 
-    private void OnTypeChanged(ChangeEventArgs e)
-        => _type = (PlannedEventType)int.Parse(e.Value?.ToString() ?? "0");
+    private static readonly PlannedEventType[] _eventTypes =
+    [
+        PlannedEventType.Meal, PlannedEventType.Glucose, PlannedEventType.Insulin,
+        PlannedEventType.Weight, PlannedEventType.Activity
+    ];
+
+    private void SelectType(PlannedEventType type) => _type = type;
+
+    private static string EventTypeIcon(PlannedEventType t) => t switch
+    {
+        PlannedEventType.Meal     => "meals.svg",
+        PlannedEventType.Glucose  => "glucometer.svg",
+        PlannedEventType.Insulin  => "insulin.svg",
+        PlannedEventType.Weight   => "weighing.svg",
+        PlannedEventType.Activity => "training.svg",
+        _ => "meals.svg"
+    };
+
+    private static string EventTypeClass(PlannedEventType t) => t switch
+    {
+        PlannedEventType.Meal     => "meal",
+        PlannedEventType.Glucose  => "glucose",
+        PlannedEventType.Insulin  => "insulin",
+        PlannedEventType.Weight   => "weight",
+        PlannedEventType.Activity => "activity",
+        _ => "meal"
+    };
 
     private void SearchProducts(ChangeEventArgs e)
     {
@@ -272,6 +320,8 @@
         _mealItems.Add(new PlannedMealItem(p.Id, p.Name, defaultQty, p.MeasureType, p.PieceWeightG));
         _productSearch = ""; _searchResults = [];
     }
+
+    private void ApplyTemplate(MealTemplateDto tpl) => _mealItems.AddRange(tpl.Items);
 
     private void UpdateGrams(int idx, double g)
     {
@@ -312,7 +362,7 @@
                 InsulinSubtype: _type == PlannedEventType.Insulin ? _insulinSubtype : null);
         }
 
-        await Db.PutAsync("planned_events", dto, pending: false);
+        await Db.PutAsync("planned_events", dto, pending: true);
 
         // Auto-create insulin reminder for new meal events
         if (!IsEditMode && _type == PlannedEventType.Meal && _mealItems.Count > 0 && _addInsulinReminder)
@@ -325,8 +375,9 @@
             {
                 var insulinDto = new PlannedEventDto(
                     Guid.NewGuid(), insulinTime, (int)PlannedEventType.Insulin,
-                    $"Болюс перед едой", null, null, false, DateTime.UtcNow, false);
-                await Db.PutAsync("planned_events", insulinDto, pending: false);
+                    $"Болюс перед едой", null, null, false, DateTime.UtcNow, false,
+                    InsulinSubtype: 0);
+                await Db.PutAsync("planned_events", insulinDto, pending: true);
             }
         }
 
@@ -343,7 +394,7 @@
         _saving = true;
         await Db.PutAsync("planned_events",
             EditEvent with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow },
-            pending: false);
+            pending: true);
 
         // Cascade: remove any meal entries created from completing this event so the
         // meal diary doesn't keep a duplicate after the planned event is deleted.
@@ -351,6 +402,22 @@
         var linkedIds = EventReconciler.LinkedMealIds(EditEvent.Id, allMeals).ToHashSet();
         foreach (var m in allMeals.Where(m => linkedIds.Contains(m.Id)))
             await Db.PutAsync("meals", m with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow }, pending: true);
+
+        // Cascade: same for glucose readings / insulin injections created from this event —
+        // otherwise they survive in their own lists (Глюкоза/Инсулин) as orphan records once
+        // the planned event that produced them is gone.
+        var thisEvent = new[] { EditEvent };
+        var allGlucose = (await Db.GetAllAsync<GlucoseReadingDto>("glucose")).ToList();
+        var hiddenGlucoseIds = EventReconciler.HiddenRecordIds(allGlucose,
+            g => g.Id, g => g.LinkedEventId, g => g.MeasuredAtUtc, thisEvent);
+        foreach (var g in allGlucose.Where(g => hiddenGlucoseIds.Contains(g.Id)))
+            await Db.PutAsync("glucose", g with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow }, pending: true);
+
+        var allInsulin = (await Db.GetAllAsync<InsulinInjectionDto>("insulin")).ToList();
+        var hiddenInsulinIds = EventReconciler.HiddenRecordIds(allInsulin,
+            i => i.Id, i => i.LinkedEventId, i => i.InjectedAtUtc, thisEvent);
+        foreach (var i in allInsulin.Where(i => hiddenInsulinIds.Contains(i.Id)))
+            await Db.PutAsync("insulin", i with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow }, pending: true);
 
         _ = Sync.SyncAsync();
         _saving = false;
@@ -377,10 +444,8 @@
     {
         _note = ""; _error = null; _mealItems = []; _productSearch = ""; _searchResults = []; _insulinSubtype = 0;
         _hour = DateTime.Now.Hour; _min = (DateTime.Now.Minute / 5) * 5;
-        _type = PlannedEventType.Glucose; _addInsulinReminder = true;
+        _type = PlannedEventType.Meal; _addInsulinReminder = true;
     }
 
     private Task Close() { Reset(); return OnClose.InvokeAsync(); }
-
-    private void OnBackdropClick() => _ = Close();
 }

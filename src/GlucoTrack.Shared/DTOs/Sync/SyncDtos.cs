@@ -21,8 +21,9 @@ public record GlucoseReadingDto(
     bool IsDeleted,
     Guid? LinkedEventId = null);
 
-// Planned events are stored client-side (IndexedDB "planned_events") but the DTOs live
-// here in Shared so the calculation/reconciliation logic and its tests can use them.
+// Planned events are stored client-side (IndexedDB "planned_events") and synced to the
+// server like the other entities below; the DTOs live here in Shared so the
+// calculation/reconciliation logic and its tests can use them too.
 public record PlannedEventDto(
     Guid Id,
     DateTime PlannedAtUtc,
@@ -200,7 +201,8 @@ public record SyncPushRequest(
     UserSettingsDto? UserSettings,
     UserProfileDto? UserProfile = null,
     List<UserInsulinDto>? UserInsulins = null,
-    List<MealTemplateDto>? MealTemplates = null);
+    List<MealTemplateDto>? MealTemplates = null,
+    List<PlannedEventDto>? PlannedEvents = null);
 
 public record SyncPushResponse(
     List<Guid> Conflicts,
@@ -216,4 +218,5 @@ public record SyncPullResponse(
     UserSettingsDto? UserSettings,
     UserProfileDto? UserProfile = null,
     List<UserInsulinDto>? UserInsulins = null,
-    List<MealTemplateDto>? MealTemplates = null);
+    List<MealTemplateDto>? MealTemplates = null,
+    List<PlannedEventDto>? PlannedEvents = null);

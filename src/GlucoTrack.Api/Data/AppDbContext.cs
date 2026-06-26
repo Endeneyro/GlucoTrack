@@ -31,6 +31,8 @@ public class AppDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, Guid>
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<MealTemplate> MealTemplates => Set<MealTemplate>();
     public DbSet<MealTemplateItem> MealTemplateItems => Set<MealTemplateItem>();
+    public DbSet<PlannedEvent> PlannedEvents => Set<PlannedEvent>();
+    public DbSet<PlannedEventMealItem> PlannedEventMealItems => Set<PlannedEventMealItem>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -44,11 +46,18 @@ public class AppDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, Guid>
         builder.Entity<GlucoseReading>().HasQueryFilter(e => e.UserId == _currentUserId && !e.IsDeleted);
         builder.Entity<InsulinInjection>().HasQueryFilter(e => e.UserId == _currentUserId && !e.IsDeleted);
         builder.Entity<MealTemplate>().HasQueryFilter(e => e.UserId == _currentUserId && !e.IsDeleted);
+        builder.Entity<PlannedEvent>().HasQueryFilter(e => e.UserId == _currentUserId && !e.IsDeleted);
 
         builder.Entity<MealTemplateItem>()
             .HasOne(i => i.MealTemplate)
             .WithMany(t => t.Items)
             .HasForeignKey(i => i.MealTemplateId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Entity<PlannedEventMealItem>()
+            .HasOne(i => i.PlannedEvent)
+            .WithMany(t => t.MealItems)
+            .HasForeignKey(i => i.PlannedEventId)
             .OnDelete(DeleteBehavior.Cascade);
 
         // Products: base (null) + own + shared visible to everyone

@@ -403,7 +403,7 @@
                 .FirstOrDefault(e => e.Id == evId && !e.IsDeleted);
             if (linkedEvent is not null)
                 await Db.PutAsync("planned_events",
-                    linkedEvent with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow }, pending: false);
+                    linkedEvent with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow }, pending: true);
         }
         _ = Sync.SyncAsync();
 
@@ -412,7 +412,7 @@
             await Db.PutAsync("meals", item with { UpdatedAtUtc = DateTime.UtcNow }, pending: true);
             if (linkedEvent is not null)
                 await Db.PutAsync("planned_events",
-                    linkedEvent with { UpdatedAtUtc = DateTime.UtcNow }, pending: false);
+                    linkedEvent with { UpdatedAtUtc = DateTime.UtcNow }, pending: true);
             _allEntries.Add(item); FilterDay();
             _ = Sync.SyncAsync();
             await InvokeAsync(StateHasChanged);
@@ -440,7 +440,7 @@
         var reminder = new PlannedEventDto(
             Guid.NewGuid(), checkUtc, (int)PlannedEventType.Glucose,
             "Измерьте сахар после еды", null, null, false, DateTime.UtcNow, false);
-        await Db.PutAsync("planned_events", reminder, pending: false);
+        await Db.PutAsync("planned_events", reminder, pending: true);
     }
 
     private static MealType MealTypeFromTime(TimeOnly t) => t.Hour switch

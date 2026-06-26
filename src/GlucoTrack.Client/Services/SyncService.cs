@@ -66,15 +66,17 @@ public class SyncService
         var profileList = await _db.GetPendingAsync<UserProfileDto>("profile");
         var insulinProfiles = await _db.GetPendingAsync<UserInsulinDto>("user_insulins");
         var mealTemplates = await _db.GetPendingAsync<MealTemplateDto>("meal_templates");
+        var plannedEvents = await _db.GetPendingAsync<PlannedEventDto>("planned_events");
 
         bool anyPending = meals.Count + glucose.Count + insulin.Count +
                           products.Count + therapy.Count + settingsList.Count +
-                          profileList.Count + insulinProfiles.Count + mealTemplates.Count > 0;
+                          profileList.Count + insulinProfiles.Count + mealTemplates.Count +
+                          plannedEvents.Count > 0;
         if (!anyPending) return;
 
         var request = new SyncPushRequest(
             meals, glucose, insulin, products, therapy, settingsList.FirstOrDefault(),
-            profileList.FirstOrDefault(), insulinProfiles, mealTemplates);
+            profileList.FirstOrDefault(), insulinProfiles, mealTemplates, plannedEvents);
 
         var response = await _http.PostAsJsonAsync("/api/sync/push", request);
         if (!response.IsSuccessStatusCode) return;
@@ -90,6 +92,7 @@ public class SyncService
         await MarkSyncedBatch("therapy", therapy.Select(x => x.Id), result.Conflicts);
         await MarkSyncedBatch("user_insulins", insulinProfiles.Select(x => x.Id), result.Conflicts);
         await MarkSyncedBatch("meal_templates", mealTemplates.Select(x => x.Id), result.Conflicts);
+        await MarkSyncedBatch("planned_events", plannedEvents.Select(x => x.Id), result.Conflicts);
         if (settingsList.FirstOrDefault() is { } s && !result.Conflicts.Contains(s.Id))
             await _db.MarkSyncedAsync("settings", s.Id);
         if (profileList.FirstOrDefault() is { } pr && !result.Conflicts.Contains(pr.Id))
@@ -142,6 +145,14 @@ public class SyncService
             if (toApply.Count > 0)
                 await _db.BulkPutAsync("meal_templates", toApply);
         }
+        if (response.PlannedEvents is { Count: > 0 } plannedEvents)
+        {
+            var pendingEvents = (await _db.GetPendingAsync<PlannedEventDto>("planned_events"))
+                .Select(t => t.Id).ToHashSet();
+            var toApply = plannedEvents.Where(t => !pendingEvents.Contains(t.Id)).ToList();
+            if (toApply.Count > 0)
+                await _db.BulkPutAsync("planned_events", toApply);
+        }
 
         await _db.SetLastSyncTicksAsync(response.ServerUtc.Ticks);
     }
@@ -149,7 +160,7 @@ public class SyncService
     public async Task RefreshPendingCountAsync()
     {
         int count = 0;
-        foreach (var store in new[] { "meals", "glucose", "insulin", "products", "therapy", "settings", "profile", "user_insulins", "meal_templates" })
+        foreach (var store in new[] { "meals", "glucose", "insulin", "products", "therapy", "settings", "profile", "user_insulins", "meal_templates", "planned_events" })
             count += (await _db.GetPendingAsync<object>(store)).Count;
         PendingCount = count;
     }

@@ -89,8 +89,17 @@ public static class SyncEndpoints
                 t.UpdatedAtUtc, t.IsDeleted, t.HasImage))
             .ToListAsync();
 
+        var plannedEvents = await db.PlannedEvents.IgnoreQueryFilters()
+            .Include(t => t.MealItems)
+            .Where(e => e.UserId == userId && e.UpdatedAtUtc > sinceTime)
+            .Select(t => new PlannedEventDto(
+                t.Id, t.PlannedAtUtc, t.EventType, t.Note, t.GroupId,
+                t.MealItems.Select(i => new PlannedMealItem(i.ProductId, i.ProductName, i.Grams, i.MeasureType, i.PieceWeightG)).ToList(),
+                t.IsDone, t.UpdatedAtUtc, t.IsDeleted, t.InsulinSubtype))
+            .ToListAsync();
+
         return Results.Ok(new SyncPullResponse(
-            DateTime.UtcNow, meals, glucose, insulin, productDtos, coefficients, settings, profile, insulins, mealTemplates));
+            DateTime.UtcNow, meals, glucose, insulin, productDtos, coefficients, settings, profile, insulins, mealTemplates, plannedEvents));
     }
 
     private static async Task<IResult> PushAsync(
@@ -114,6 +123,8 @@ public static class SyncEndpoints
             applied += await ApplyUserInsulins(ins, userId, db, conflicts);
         if (request.MealTemplates is { Count: > 0 } tpls)
             applied += await ApplyMealTemplates(tpls, userId, db, conflicts);
+        if (request.PlannedEvents is { Count: > 0 } events)
+            applied += await ApplyPlannedEvents(events, userId, db, conflicts);
 
         await db.SaveChangesAsync();
         return Results.Ok(new SyncPushResponse(conflicts, applied));
@@ -455,6 +466,10 @@ public static class SyncEndpoints
         List<MealTemplateDto> dtos, Guid userId, AppDbContext db, List<Guid> conflicts)
     {
         int count = 0;
+        // A push can contain duplicate Ids for the same template (e.g. an edit queued before
+        // the previous save synced) — keep only the latest one, otherwise two inserts with the
+        // same Id race against db.MealTemplates' PK and PostgreSQL throws 23505.
+        dtos = dtos.GroupBy(d => d.Id).Select(g => g.OrderByDescending(d => d.UpdatedAtUtc).First()).ToList();
         var ids = dtos.Select(d => d.Id).ToList();
         var existing = await db.MealTemplates.IgnoreQueryFilters()
             .Include(t => t.Items)
@@ -485,6 +500,62 @@ public static class SyncEndpoints
                     db.MealTemplateItems.Add(new MealTemplateItem
                     {
                         Id = Guid.NewGuid(), MealTemplateId = row.Id, ProductId = item.ProductId,
+                        ProductName = item.ProductName, Grams = item.Grams,
+                        MeasureType = item.MeasureType, PieceWeightG = item.PieceWeightG
+                    });
+                count++;
+            }
+            else conflicts.Add(dto.Id);
+        }
+        return count;
+    }
+
+    private static async Task<int> ApplyPlannedEvents(
+        List<PlannedEventDto> dtos, Guid userId, AppDbContext db, List<Guid> conflicts)
+    {
+        int count = 0;
+        // Dedupe by Id: a push can contain duplicate Ids for the same event (e.g. an edit
+        // queued before the previous save synced) — keep only the latest one, otherwise two
+        // inserts with the same Id race against the PK and PostgreSQL throws 23505.
+        dtos = dtos.GroupBy(d => d.Id).Select(g => g.OrderByDescending(d => d.UpdatedAtUtc).First()).ToList();
+        var ids = dtos.Select(d => d.Id).ToList();
+        var existing = await db.PlannedEvents.IgnoreQueryFilters()
+            .Include(t => t.MealItems)
+            .Where(e => ids.Contains(e.Id) && e.UserId == userId)
+            .ToDictionaryAsync(e => e.Id);
+
+        foreach (var dto in dtos)
+        {
+            if (!existing.TryGetValue(dto.Id, out var row))
+            {
+                var t = new PlannedEvent
+                {
+                    Id = dto.Id, UserId = userId, PlannedAtUtc = dto.PlannedAtUtc,
+                    EventType = dto.EventType, Note = dto.Note, GroupId = dto.GroupId,
+                    IsDone = dto.IsDone, InsulinSubtype = dto.InsulinSubtype,
+                    UpdatedAtUtc = dto.UpdatedAtUtc, IsDeleted = dto.IsDeleted
+                };
+                foreach (var item in dto.MealItems ?? [])
+                    t.MealItems.Add(new PlannedEventMealItem
+                    {
+                        Id = Guid.NewGuid(), PlannedEventId = t.Id, ProductId = item.ProductId,
+                        ProductName = item.ProductName, Grams = item.Grams,
+                        MeasureType = item.MeasureType, PieceWeightG = item.PieceWeightG
+                    });
+                db.PlannedEvents.Add(t);
+                count++;
+            }
+            else if (dto.UpdatedAtUtc >= row.UpdatedAtUtc)
+            {
+                row.PlannedAtUtc = dto.PlannedAtUtc; row.EventType = dto.EventType;
+                row.Note = dto.Note; row.GroupId = dto.GroupId; row.IsDone = dto.IsDone;
+                row.InsulinSubtype = dto.InsulinSubtype;
+                row.UpdatedAtUtc = dto.UpdatedAtUtc; row.IsDeleted = dto.IsDeleted;
+                db.PlannedEventMealItems.RemoveRange(row.MealItems);
+                foreach (var item in dto.MealItems ?? [])
+                    db.PlannedEventMealItems.Add(new PlannedEventMealItem
+                    {
+                        Id = Guid.NewGuid(), PlannedEventId = row.Id, ProductId = item.ProductId,
                         ProductName = item.ProductName, Grams = item.Grams,
                         MeasureType = item.MeasureType, PieceWeightG = item.PieceWeightG
                     });
