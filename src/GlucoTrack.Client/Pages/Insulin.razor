@@ -179,7 +179,7 @@
     private InsulinType _type = InsulinType.Bolus;
     private double _units = 1, _carbs, _glucoseBefore;
     private double _totalBolus, _totalBasal;
-    private double _diaHours = 4.0;
+    private double _diaHours = 4.0, _peakMinutes = 75;
 
     protected override async Task OnInitializedAsync()
     {
@@ -222,7 +222,8 @@
                             ?? coeffs.FirstOrDefault();
                 var settings = (await Db.GetAllAsync<UserSettingsDto>("settings")).FirstOrDefault();
                 double target = settings?.TargetGlucose ?? 6.0;
-                if (settings?.DiaHours > 0) _diaHours = settings.DiaHours;
+                var insulins = await Db.GetAllAsync<UserInsulinDto>("user_insulins");
+                (_diaHours, _peakMinutes) = InsulinProfileResolver.ActiveBolusCurve(insulins, settings?.DiaHours ?? 4.0);
 
                 // IC обязан быть > 0: BolusCalculator бросает исключение при IC <= 0,
                 // иначе страница коррекции падает при загрузке.
@@ -249,9 +250,10 @@
                 _type = (_linkedEvent.InsulinSubtype ?? 0) == 1 ? InsulinType.Basal : InsulinType.Bolus;
             }
 
-            // DIA for IOB hint must come from settings on this path too (not just the Alert path).
+            // DIA/пик кривой берём от активного болюсного инсулина (не только на Alert-пути).
             var settings = (await Db.GetAllAsync<UserSettingsDto>("settings")).FirstOrDefault();
-            if (settings?.DiaHours > 0) _diaHours = settings.DiaHours;
+            var insulins = await Db.GetAllAsync<UserInsulinDto>("user_insulins");
+            (_diaHours, _peakMinutes) = InsulinProfileResolver.ActiveBolusCurve(insulins, settings?.DiaHours ?? 4.0);
 
             await PrefillFromContextAsync();
             _showForm = true;
@@ -323,7 +325,7 @@
             .Where(i => !i.IsDeleted && (int)InsulinType.Bolus == i.InsulinType)
             .Select(i => (i.InjectedAtUtc, i.Units, i.ExtendedDurationHours)),
         DateTime.UtcNow,
-        _diaHours);
+        _diaHours, _peakMinutes);
 
     private void CalcTotals()
     {

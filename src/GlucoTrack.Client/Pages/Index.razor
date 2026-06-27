@@ -324,7 +324,7 @@ else
 
     private double _targetCal = 2000, _targetProt = 80, _targetFat = 67, _targetCarbs = 250;
     private double _gLow = 3.9, _gHigh = 10.0;
-    private double _xeGrams = 12, _diaHours = 4.0;
+    private double _xeGrams = 12, _diaHours = 4.0, _peakMinutes = 75;
     private double _todayCal, _todayProt, _todayFat, _todayCarbs;
     private List<GlucoseReadingDto> _todayGlucose = [];
     private List<InsulinInjectionDto> _bolusInjections = [];
@@ -365,10 +365,12 @@ else
             _targetCal   = settings.DailyCalories; _targetProt = settings.DailyProtein;
             _targetFat   = settings.DailyFat;      _targetCarbs = settings.DailyCarbs;
             if (settings.XeGrams > 0) _xeGrams = settings.XeGrams;
-            if (settings.DiaHours > 0) _diaHours = settings.DiaHours;
             if (settings.TargetGlucoseLow > 0 && settings.TargetGlucoseHigh > settings.TargetGlucoseLow)
             { _gLow = settings.TargetGlucoseLow; _gHigh = settings.TargetGlucoseHigh; }
         }
+
+        var insulins = await Db.GetAllAsync<UserInsulinDto>("user_insulins");
+        (_diaHours, _peakMinutes) = InsulinProfileResolver.ActiveBolusCurve(insulins, settings?.DiaHours ?? 4.0);
 
         _bolusInjections = (await Db.GetAllAsync<InsulinInjectionDto>("insulin"))
             .Where(i => !i.IsDeleted && i.InsulinType == (int)GlucoTrack.Shared.Entities.InsulinType.Bolus)
@@ -549,7 +551,7 @@ else
     {
         _iob = InsulinOnBoard.Calculate(
             _bolusInjections.Select(i => (i.InjectedAtUtc, i.Units, i.ExtendedDurationHours)),
-            DateTime.UtcNow, _diaHours);
+            DateTime.UtcNow, _diaHours, _peakMinutes);
     }
 
     public void Dispose() => _iobTimer?.Dispose();

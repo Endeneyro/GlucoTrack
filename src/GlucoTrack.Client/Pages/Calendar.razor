@@ -531,12 +531,17 @@
             var nowTime = TimeOnly.FromDateTime(DateTime.Now);
             var coeff = coeffs.FirstOrDefault(c => c.CoversTime(nowTime)) ?? coeffs.FirstOrDefault();
 
+            var insulinProfiles = await Db.GetAllAsync<UserInsulinDto>("user_insulins");
+            var (diaHours, peakMinutes) = GlucoTrack.Shared.Calculations.InsulinProfileResolver
+                .ActiveBolusCurve(insulinProfiles, settings?.DiaHours ?? 4.0);
+
             var alert = GlucoseAlertDecider.Decide(latest.ValueMmol, target, insulinAll, allEvents, DateTime.UtcNow,
                 correctionTarget: settings?.TargetGlucose,
                 insulinSensitivityFactor: coeff?.InsulinSensitivityFactor,
-                diaHours: settings?.DiaHours > 0 ? settings.DiaHours : GlucoTrack.Shared.Calculations.InsulinOnBoard.DefaultDiaHours,
+                diaHours: diaHours,
                 latestGlucoseAtUtc: latest.MeasuredAtUtc,
-                targetLow: targetLow);
+                targetLow: targetLow,
+                peakMinutes: peakMinutes);
             switch (alert.Kind)
             {
                 case GlucoseAlertKind.CriticalLow:

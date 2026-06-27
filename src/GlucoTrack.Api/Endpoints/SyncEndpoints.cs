@@ -77,7 +77,8 @@ public static class SyncEndpoints
         var insulins = await db.UserInsulins.IgnoreQueryFilters()
             .Where(e => e.UserId == userId && e.UpdatedAtUtc > sinceTime)
             .Select(e => new UserInsulinDto(e.Id, e.Name, e.InsulinType, e.TypicalDose,
-                e.IsActive, e.Note, e.UpdatedAtUtc, e.IsDeleted))
+                e.IsActive, e.Note, e.UpdatedAtUtc, e.IsDeleted,
+                e.Brand, e.PeakMinutes, e.DiaHours))
             .ToListAsync();
 
         var mealTemplates = await db.MealTemplates.IgnoreQueryFilters()
@@ -445,6 +446,7 @@ public static class SyncEndpoints
                     Id = dto.Id, UserId = userId, Name = dto.Name,
                     InsulinType = dto.InsulinType, TypicalDose = dto.TypicalDose,
                     IsActive = dto.IsActive, Note = dto.Note,
+                    Brand = dto.Brand, PeakMinutes = dto.PeakMinutes, DiaHours = dto.DiaHours,
                     UpdatedAtUtc = dto.UpdatedAtUtc, IsDeleted = dto.IsDeleted
                 });
                 count++;
@@ -454,6 +456,7 @@ public static class SyncEndpoints
                 row.Name = dto.Name; row.InsulinType = dto.InsulinType;
                 row.TypicalDose = dto.TypicalDose; row.IsActive = dto.IsActive;
                 row.Note = dto.Note; row.UpdatedAtUtc = dto.UpdatedAtUtc;
+                row.Brand = dto.Brand; row.PeakMinutes = dto.PeakMinutes; row.DiaHours = dto.DiaHours;
                 row.IsDeleted = dto.IsDeleted;
                 count++;
             }

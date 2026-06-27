@@ -217,7 +217,7 @@
     [SupplyParameterFromQuery] public string? Glucose  { get; set; }
     [SupplyParameterFromQuery] public string? EventId  { get; set; }
 
-    private double _carbs = 0, _glucose = 6.0, _targetGlucose = 6.0, _gLow = 3.9, _diaHours = 4.0;
+    private double _carbs = 0, _glucose = 6.0, _targetGlucose = 6.0, _gLow = 3.9, _diaHours = 4.0, _peakMinutes = 75;
     private int _bolusType = 0;     // 0=standard 1=extended 2=dual
     private double _extendedHours = 2.0;
     private int _immediatePercent = 50;
@@ -254,10 +254,11 @@
             .FirstOrDefault();
         if (settings is not null && settings.TargetGlucose > 0)
             _targetGlucose = settings.TargetGlucose;
-        if (settings is not null && settings.DiaHours > 0)
-            _diaHours = settings.DiaHours;
         if (settings is not null && settings.TargetGlucoseLow > 0)
             _gLow = settings.TargetGlucoseLow;
+
+        var insulins = await Db.GetAllAsync<GlucoTrack.Shared.DTOs.Sync.UserInsulinDto>("user_insulins");
+        (_diaHours, _peakMinutes) = InsulinProfileResolver.ActiveBolusCurve(insulins, settings?.DiaHours ?? 4.0);
 
         // Pre-fill from query params (called from planned insulin event)
         var notes = new List<string>();
@@ -275,7 +276,7 @@
             .Where(i => (int)GlucoTrack.Shared.Entities.InsulinType.Bolus == i.InsulinType)
             .Select(i => (i.InjectedAtUtc, i.Units, i.ExtendedDurationHours)),
         DateTime.UtcNow,
-        _diaHours);
+        _diaHours, _peakMinutes);
 
     private void Recalculate()
     {

@@ -109,6 +109,7 @@ public static class SettingsEndpoints
             Id = Guid.NewGuid(), UserId = currentUser.UserId,
             Name = req.Name, InsulinType = req.InsulinType,
             TypicalDose = req.TypicalDose, IsActive = req.IsActive, Note = req.Note,
+            Brand = req.Brand, PeakMinutes = req.PeakMinutes, DiaHours = req.DiaHours,
             UpdatedAtUtc = DateTime.UtcNow
         };
         db.UserInsulins.Add(ins);
@@ -123,6 +124,7 @@ public static class SettingsEndpoints
         if (ins is null) return Results.NotFound();
         ins.Name = req.Name; ins.InsulinType = req.InsulinType;
         ins.TypicalDose = req.TypicalDose; ins.IsActive = req.IsActive; ins.Note = req.Note;
+        ins.Brand = req.Brand; ins.PeakMinutes = req.PeakMinutes; ins.DiaHours = req.DiaHours;
         ins.UpdatedAtUtc = DateTime.UtcNow;
         await db.SaveChangesAsync();
         return Results.Ok(ins);
@@ -192,5 +194,6 @@ public static class SettingsEndpoints
         double InsulinToCarbRatio, double InsulinSensitivityFactor);
 
     private record InsulinProfileRequest(
-        string Name, int InsulinType, double? TypicalDose, bool IsActive, string? Note);
+        string Name, int InsulinType, double? TypicalDose, bool IsActive, string? Note,
+        int Brand = 0, int PeakMinutes = 75, double DiaHours = 4.0);
 }

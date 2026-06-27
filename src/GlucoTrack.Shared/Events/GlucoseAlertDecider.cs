@@ -46,7 +46,8 @@ public static class GlucoseAlertDecider
         double diaHours = InsulinOnBoard.DefaultDiaHours,
         DateTime? latestGlucoseAtUtc = null,
         double targetLow = DefaultTargetLowMmol,
-        double criticalLowMmol = CriticalLowGlucoseMmol)
+        double criticalLowMmol = CriticalLowGlucoseMmol,
+        double peakMinutes = InsulinOnBoard.DefaultPeakMinutes)
     {
         // Гипогликемия — острая угроза, проверяем ПЕРВОЙ (важнее любого высокого сахара):
         // низкий сахар требует немедленных быстрых углеводов, инсулин противопоказан.
@@ -67,7 +68,7 @@ public static class GlucoseAlertDecider
         bool preciseCoverage = correctionTarget is > 0 && insulinSensitivityFactor is > 0;
         if (preciseCoverage)
         {
-            var iob = InsulinOnBoard.Calculate(bolusInjections, nowUtc, diaHours);
+            var iob = InsulinOnBoard.Calculate(bolusInjections, nowUtc, diaHours, peakMinutes);
             var neededCorrection = (latestGlucose - correctionTarget!.Value) / insulinSensitivityFactor!.Value;
             // Уже введённая коррекция покрывает нужную дозу — гасим алерт, в т.ч. критический:
             // повторный укол поверх достаточного IOB опаснее (стэкинг → отложенная гипогликемия),

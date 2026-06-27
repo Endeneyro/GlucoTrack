@@ -50,48 +50,74 @@ public record BolusResult(double MealDose, double CorrectionDose, double TotalDo
 /// <summary>
 /// Активный инсулин (Insulin on Board) — сколько ранее введённого болюса ещё работает.
 ///
-/// Кусочно-линейная модель (3 сегмента):
-///   0–30 мин   : IOB = 100% — инсулин ещё не всосался, действие не началось.
-///   30–90 мин  : быстрое падение 100% → 40% — пик активности ультракороткого инсулина.
-///   90–DIA мин : медленный хвост 40% → 0% — остаточная активность.
+/// Экспоненциальная модель oref0/Loop (OpenAPS), параметризованная двумя числами:
+///   • DIA  — длительность действия инсулина (ч);
+///   • peak — время пика активности (мин), зависит от препарата (Fiasp ≈ 55, Humalog ≈ 75 …).
 ///
-/// Это даёт более безопасный расчёт в первые 30–60 минут после укола,
-/// исключая занижение коррекционной дозы на ещё не начавший работать инсулин.
+/// Кривая <see cref="Fraction"/> — остаток инсулина (1→0), её вычитают из коррекционной дозы.
+/// Кривая <see cref="Activity"/> — скорость действия (−dIOB/dt), для визуализации профиля.
+/// В отличие от прежней кусочно-линейной трапеции, экспонента начинает действовать
+/// сразу (медленно), даёт гладкий пик ровно на <c>peak</c> и плавный хвост к DIA.
 /// </summary>
 public static class InsulinOnBoard
 {
     /// <summary>Длительность действия болюсного (ультракороткого) инсулина по умолчанию, ч.</summary>
     public const double DefaultDiaHours = 4.0;
 
-    // Границы кривой (в минутах)
-    private const double OnsetMinutes    = 30.0;  // начало всасывания
-    private const double PeakEndMinutes  = 90.0;  // конец пиковой активности
-    private const double PeakRemaining   = 0.40;  // доля IOB оставшаяся в конце пика
+    /// <summary>Время пика по умолчанию (ультракороткий инсулин), мин.</summary>
+    public const double DefaultPeakMinutes = 75.0;
+
+    /// <summary>
+    /// Параметры экспоненциальной модели (tau, a, S) для заданных DIA и пика.
+    /// peak клампится в (0, DIA/2) — модель определена только при peak &lt; DIA/2.
+    /// </summary>
+    private static (double Tau, double A, double S, double End) CurveParams(double diaHours, double peakMinutes)
+    {
+        double end = diaHours * 60.0;
+        // peak должен быть строго меньше DIA/2, иначе tau вырождается (деление на ~0)
+        double peak = Math.Clamp(peakMinutes, 10.0, Math.Max(10.0, end * 0.5 - 1.0));
+
+        double tau = peak * (1.0 - peak / end) / (1.0 - 2.0 * peak / end);
+        double a   = 2.0 * tau / end;
+        double s   = 1.0 / (1.0 - a + (1.0 + a) * Math.Exp(-end / tau));
+        return (tau, a, s, end);
+    }
 
     /// <summary>
     /// Доля активного инсулина (0..1) через <paramref name="elapsedMinutes"/> минут
-    /// после введения при заданном DIA.
+    /// после введения при заданных DIA и времени пика.
     /// </summary>
-    public static double Fraction(double elapsedMinutes, double diaHours)
+    public static double Fraction(double elapsedMinutes, double diaHours, double peakMinutes)
     {
         if (diaHours <= 0) throw new ArgumentOutOfRangeException(nameof(diaHours), "DIA должен быть > 0");
-        if (elapsedMinutes < 0 || elapsedMinutes >= diaHours * 60) return 0.0;
 
-        if (elapsedMinutes < OnsetMinutes)
-            return 1.0; // инсулин ещё не всосался — весь IOB на борту
+        var (tau, a, s, end) = CurveParams(diaHours, peakMinutes);
+        if (elapsedMinutes < 0 || elapsedMinutes >= end) return 0.0;
 
-        double diaMinutes = diaHours * 60.0;
+        double t = elapsedMinutes;
+        double iob = 1.0 - s * (1.0 - a)
+            * ((t * t / (tau * end * (1.0 - a)) - t / tau - 1.0) * Math.Exp(-t / tau) + 1.0);
+        return Math.Clamp(iob, 0.0, 1.0);
+    }
 
-        if (elapsedMinutes < PeakEndMinutes)
-        {
-            // Быстрое падение: 1.0 → PeakRemaining
-            double t = (elapsedMinutes - OnsetMinutes) / (PeakEndMinutes - OnsetMinutes);
-            return 1.0 - (1.0 - PeakRemaining) * t;
-        }
+    /// <summary>Перегрузка с пиком по умолчанию (обратная совместимость).</summary>
+    public static double Fraction(double elapsedMinutes, double diaHours)
+        => Fraction(elapsedMinutes, diaHours, DefaultPeakMinutes);
 
-        // Медленный хвост: PeakRemaining → 0
-        double t2 = (elapsedMinutes - PeakEndMinutes) / (diaMinutes - PeakEndMinutes);
-        return PeakRemaining * (1.0 - t2);
+    /// <summary>
+    /// Активность инсулина — доля дозы, отрабатывающая за минуту, через
+    /// <paramref name="elapsedMinutes"/> мин. Интеграл по [0, DIA] = 1, максимум ≈ на пике.
+    /// Используется для отрисовки профиля действия (не для расчёта дозы).
+    /// </summary>
+    public static double Activity(double elapsedMinutes, double diaHours, double peakMinutes)
+    {
+        if (diaHours <= 0) throw new ArgumentOutOfRangeException(nameof(diaHours), "DIA должен быть > 0");
+
+        var (tau, _, s, end) = CurveParams(diaHours, peakMinutes);
+        if (elapsedMinutes <= 0 || elapsedMinutes >= end) return 0.0;
+
+        double t = elapsedMinutes;
+        return s / (tau * tau) * t * (1.0 - t / end) * Math.Exp(-t / tau);
     }
 
     /// <summary>
@@ -102,7 +128,8 @@ public static class InsulinOnBoard
     public static double Calculate(
         IEnumerable<(DateTime InjectedAtUtc, double Units, double? ExtendedDurationHours)> bolusInjections,
         DateTime nowUtc,
-        double diaHours = DefaultDiaHours)
+        double diaHours = DefaultDiaHours,
+        double peakMinutes = DefaultPeakMinutes)
     {
         if (diaHours <= 0) throw new ArgumentOutOfRangeException(nameof(diaHours), "DIA должен быть > 0");
 
@@ -111,11 +138,11 @@ public static class InsulinOnBoard
         {
             if (units <= 0) continue;
             if (extDurHours is > 0)
-                iob += ExtendedFraction(units, extDurHours.Value, injectedAtUtc, nowUtc, diaHours);
+                iob += ExtendedFraction(units, extDurHours.Value, injectedAtUtc, nowUtc, diaHours, peakMinutes);
             else
             {
                 var elapsedMinutes = (nowUtc - injectedAtUtc).TotalMinutes;
-                iob += units * Fraction(elapsedMinutes, diaHours);
+                iob += units * Fraction(elapsedMinutes, diaHours, peakMinutes);
             }
         }
         return Math.Round(iob, 2);
@@ -125,12 +152,13 @@ public static class InsulinOnBoard
     public static double Calculate(
         IEnumerable<(DateTime InjectedAtUtc, double Units)> bolusInjections,
         DateTime nowUtc,
-        double diaHours = DefaultDiaHours)
-        => Calculate(bolusInjections.Select(x => (x.InjectedAtUtc, x.Units, (double?)null)), nowUtc, diaHours);
+        double diaHours = DefaultDiaHours,
+        double peakMinutes = DefaultPeakMinutes)
+        => Calculate(bolusInjections.Select(x => (x.InjectedAtUtc, x.Units, (double?)null)), nowUtc, diaHours, peakMinutes);
 
     // Расширенный болюс: инсулин подаётся равномерно от startUtc до startUtc+extDurHours.
     // IOB вычисляется численным интегрированием (60 слайсов).
-    private static double ExtendedFraction(double units, double extDurHours, DateTime startUtc, DateTime nowUtc, double diaHours)
+    private static double ExtendedFraction(double units, double extDurHours, DateTime startUtc, DateTime nowUtc, double diaHours, double peakMinutes)
     {
         const int slices = 60;
         double deliveryMinutes = extDurHours * 60.0;
@@ -141,7 +169,7 @@ public static class InsulinOnBoard
         {
             var sliceDeliveredAt = startUtc.AddMinutes(sliceMinutes * (i + 0.5));
             var elapsed = (nowUtc - sliceDeliveredAt).TotalMinutes;
-            iob += unitsPerSlice * Fraction(elapsed, diaHours);
+            iob += unitsPerSlice * Fraction(elapsed, diaHours, peakMinutes);
         }
         return iob;
     }

@@ -6,33 +6,11 @@ public class InsulinOnBoardTests
 {
     private static readonly DateTime Now = new(2026, 6, 13, 15, 0, 0, DateTimeKind.Utc);
 
-    // ── Fraction curve ────────────────────────────────────────────────────────
+    // ── Fraction curve (экспоненциальная модель oref0) ────────────────────────
 
     [Fact]
     public void Fraction_AtZero_IsOne()
-        => Assert.Equal(1.0, InsulinOnBoard.Fraction(0, 4.0));
-
-    [Fact]
-    public void Fraction_At15min_StillOne()
-        // Onset = 30 min; до него инсулин не всосался → 100%
-        => Assert.Equal(1.0, InsulinOnBoard.Fraction(15, 4.0));
-
-    [Fact]
-    public void Fraction_At30min_StillOne()
-        => Assert.Equal(1.0, InsulinOnBoard.Fraction(30, 4.0));
-
-    [Fact]
-    public void Fraction_At60min_SeventyPercent()
-    {
-        // Середина пиковой фазы [30,90]: t=(60-30)/(90-30)=0.5 → 1-(1-0.4)*0.5=0.70
-        var f = InsulinOnBoard.Fraction(60, 4.0);
-        Assert.Equal(0.70, f, precision: 10);
-    }
-
-    [Fact]
-    public void Fraction_At90min_FourtyPercent()
-        // Конец пика → PeakRemaining = 0.40
-        => Assert.Equal(0.40, InsulinOnBoard.Fraction(90, 4.0), precision: 10);
+        => Assert.Equal(1.0, InsulinOnBoard.Fraction(0, 4.0), precision: 6);
 
     [Fact]
     public void Fraction_AtDia_Zero()
@@ -46,38 +24,101 @@ public class InsulinOnBoardTests
     public void Fraction_Future_Zero()
         => Assert.Equal(0.0, InsulinOnBoard.Fraction(-1, 4.0));
 
+    [Fact]
+    public void Fraction_StartsActingImmediately()
+    {
+        // В отличие от старой трапеции, экспонента действует уже с первых минут:
+        // через 15 мин остаток < 100%, но ещё очень близко к нему.
+        var f = InsulinOnBoard.Fraction(15, 4.0);
+        Assert.True(f is < 1.0 and > 0.95, $"ожидали 0.95..1.0, получили {f}");
+    }
+
+    [Theory]
+    // Опорные точки для DIA=4ч, peak=75 (канонический oref0)
+    [InlineData(60, 0.737)]
+    [InlineData(75, 0.634)]
+    [InlineData(120, 0.342)]
+    public void Fraction_ReferenceValues(double minutes, double expected)
+        => Assert.Equal(expected, InsulinOnBoard.Fraction(minutes, 4.0), precision: 2);
+
+    [Fact]
+    public void Fraction_MonotonicallyDecreasing()
+    {
+        double prev = InsulinOnBoard.Fraction(0, 4.0);
+        for (int t = 1; t <= 240; t++)
+        {
+            double cur = InsulinOnBoard.Fraction(t, 4.0);
+            Assert.True(cur <= prev + 1e-9, $"немонотонно на {t} мин: {cur} > {prev}");
+            prev = cur;
+        }
+    }
+
+    [Theory]
+    [InlineData(55)]
+    [InlineData(75)]
+    public void Activity_PeaksNearConfiguredPeak(double peak)
+    {
+        // Максимум кривой активности должен приходиться примерно на заданный пик (±5 мин)
+        double bestT = 0, bestA = -1;
+        for (int t = 1; t < 240; t++)
+        {
+            double a = InsulinOnBoard.Activity(t, 4.0, peak);
+            if (a > bestA) { bestA = a; bestT = t; }
+        }
+        Assert.InRange(bestT, peak - 5, peak + 5);
+    }
+
+    [Fact]
+    public void Activity_IntegratesToOne()
+    {
+        // Интеграл активности по [0, DIA] ≈ 1 (вся доза отрабатывает)
+        double sum = 0;
+        for (int t = 0; t < 240; t++)
+            sum += InsulinOnBoard.Activity(t + 0.5, 4.0, 75);
+        Assert.Equal(1.0, sum, precision: 2);
+    }
+
+    [Fact]
+    public void Fraction_FasterPeak_LessIobAtPeakTime()
+    {
+        // Более быстрый инсулин (Fiasp peak 55) к 75-й минуте оставляет меньше IOB,
+        // чем более медленный (Humalog peak 75).
+        var fiasp   = InsulinOnBoard.Fraction(75, 4.0, 55);
+        var humalog = InsulinOnBoard.Fraction(75, 4.0, 75);
+        Assert.True(fiasp < humalog, $"Fiasp {fiasp} ожидался < Humalog {humalog}");
+    }
+
+    [Fact]
+    public void Fraction_PeakClampedWhenTooLargeForDia()
+    {
+        // peak >= DIA/2 недопустим математически — клампится, исключения нет
+        var f = InsulinOnBoard.Fraction(60, 2.0, peakMinutes: 90); // DIA=120 мин, peak/2=60
+        Assert.InRange(f, 0.0, 1.0);
+    }
+
     // ── Calculate ─────────────────────────────────────────────────────────────
 
     [Fact]
     public void FreshInjection_FullDose()
     {
-        // t=0 → fraction=1.0
         var iob = InsulinOnBoard.Calculate(new[] { (Now, 6.0) }, Now, diaHours: 4.0);
         Assert.Equal(6.0, iob);
     }
 
     [Fact]
-    public void At15min_StillFullDose()
+    public void OneHourIn_ReferenceValue()
     {
-        // t=15 мин — инсулин ещё не всосался, IOB=100%
-        var iob = InsulinOnBoard.Calculate(new[] { (Now.AddMinutes(-15), 6.0) }, Now, diaHours: 4.0);
-        Assert.Equal(6.0, iob);
-    }
-
-    [Fact]
-    public void OneHourIn_SeventyPercent()
-    {
-        // t=60 мин → fraction=0.70 → 6×0.70=4.2
+        // t=60 мин → fraction≈0.737 → 6×0.737≈4.42
         var iob = InsulinOnBoard.Calculate(new[] { (Now.AddHours(-1), 6.0) }, Now, diaHours: 4.0);
-        Assert.Equal(4.2, iob);
+        Assert.Equal(4.42, iob, precision: 2);
     }
 
     [Fact]
-    public void TwoHoursIn_TailPhase()
+    public void TwoHoursIn_ReferenceValue()
     {
-        // t=120 мин → хвостовая фаза: 0.40*(1-(120-90)/(240-90))=0.40*0.8=0.32 → 6×0.32=1.92
+        // t=120 мин → fraction≈0.342 → 6×0.342≈2.05
         var iob = InsulinOnBoard.Calculate(new[] { (Now.AddHours(-2), 6.0) }, Now, diaHours: 4.0);
-        Assert.Equal(1.92, iob);
+        Assert.Equal(2.05, iob, precision: 2);
     }
 
     [Fact]
@@ -90,13 +131,13 @@ public class InsulinOnBoardTests
     [Fact]
     public void MultipleInjections_Summed()
     {
-        // 1ч назад: 3×0.70=2.10; 2ч назад: 4×0.32=1.28 → 3.38
+        // 1ч назад: 3×0.737≈2.21; 2ч назад: 4×0.342≈1.37 → ≈3.58
         var iob = InsulinOnBoard.Calculate(new[]
         {
             (Now.AddHours(-1), 3.0),
             (Now.AddHours(-2), 4.0),
         }, Now, 4.0);
-        Assert.Equal(3.38, iob);
+        Assert.Equal(3.58, iob, precision: 2);
     }
 
     [Fact]
@@ -113,6 +154,10 @@ public class InsulinOnBoardTests
     [Fact]
     public void DefaultDia_IsFourHours()
         => Assert.Equal(4.0, InsulinOnBoard.DefaultDiaHours);
+
+    [Fact]
+    public void DefaultPeak_Is75Minutes()
+        => Assert.Equal(75.0, InsulinOnBoard.DefaultPeakMinutes);
 
     [Fact]
     public void CustomDia_3h_EarlierExpiry()

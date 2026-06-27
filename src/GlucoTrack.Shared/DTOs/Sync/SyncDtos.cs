@@ -180,7 +180,10 @@ public record UserInsulinDto(
     bool IsActive,
     string? Note,
     DateTime UpdatedAtUtc,
-    bool IsDeleted);
+    bool IsDeleted,
+    int Brand = 0,
+    int PeakMinutes = 75,
+    double DiaHours = 4.0);
 
 public record MealTemplateDto(
     Guid Id,
