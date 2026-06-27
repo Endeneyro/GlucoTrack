@@ -6,10 +6,13 @@ namespace GlucoTrack.Shared.Events;
 
 public enum GlucoseAlertKind
 {
-    None,        // сахар в норме либо недавно уже был болюс
-    Correction,  // выше нормы, рекомендуется коррекционный укол
-    PendingBolus,// выше нормы, но скоро плановый болюс — коррекция учтётся в нём
-    Critical     // критически высокий — коррекция сейчас, приём пищи отодвинуть
+    None,          // сахар в норме либо недавно уже был болюс
+    Correction,    // выше нормы, рекомендуется коррекционный укол
+    PendingBolus,  // выше нормы, но скоро плановый болюс — коррекция учтётся в нём
+    Critical,      // критически высокий — коррекция сейчас, приём пищи отодвинуть
+    CorrectionDone,// выше/критически высокий, но коррекция уже введена в ответ на этот замер
+    Low,           // ниже нормы (гипогликемия) — съесть быстрые углеводы, инсулин не вводить
+    CriticalLow    // тяжёлая гипогликемия — немедленно быстрые углеводы / помощь, риск для жизни
 }
 
 public record GlucoseAlert(GlucoseAlertKind Kind, double Glucose, DateTime? PendingBolusUtc);
@@ -23,6 +26,12 @@ public static class GlucoseAlertDecider
     /// <summary>Порог критически высокого сахара: коррекция сейчас + отодвинуть приём пищи.</summary>
     public const double CriticalGlucoseMmol = 15.0;
 
+    /// <summary>Нижняя граница нормы по умолчанию (гипогликемия), ммоль/л.</summary>
+    public const double DefaultTargetLowMmol = 3.9;
+
+    /// <summary>Порог тяжёлой гипогликемии — немедленная угроза жизни, ммоль/л.</summary>
+    public const double CriticalLowGlucoseMmol = 3.0;
+
     public static GlucoseAlert Decide(
         double latestGlucose,
         double targetHigh,
@@ -34,8 +43,18 @@ public static class GlucoseAlertDecider
         double pendingWindowMinutes = 120,
         double? correctionTarget = null,
         double? insulinSensitivityFactor = null,
-        double diaHours = InsulinOnBoard.DefaultDiaHours)
+        double diaHours = InsulinOnBoard.DefaultDiaHours,
+        DateTime? latestGlucoseAtUtc = null,
+        double targetLow = DefaultTargetLowMmol,
+        double criticalLowMmol = CriticalLowGlucoseMmol)
     {
+        // Гипогликемия — острая угроза, проверяем ПЕРВОЙ (важнее любого высокого сахара):
+        // низкий сахар требует немедленных быстрых углеводов, инсулин противопоказан.
+        if (latestGlucose < targetLow)
+            return new GlucoseAlert(
+                latestGlucose <= criticalLowMmol ? GlucoseAlertKind.CriticalLow : GlucoseAlertKind.Low,
+                latestGlucose, null);
+
         if (latestGlucose <= targetHigh)
             return new GlucoseAlert(GlucoseAlertKind.None, latestGlucose, null);
 
@@ -57,6 +76,17 @@ public static class GlucoseAlertDecider
             if (iob >= neededCorrection)
                 return new GlucoseAlert(GlucoseAlertKind.None, latestGlucose, null);
         }
+
+        // Коррекция уже введена в ответ на ЭТОТ замер — болюс с временем не раньше самого замера
+        // (а не старый болюс на еду до него). Тогда не кричим «коли сейчас», а подтверждаем факт
+        // ввода: повторный укол поверх свежей коррекции опаснее. Покрытие по IOB может быть
+        // неполным (доза распалась/округлилась/занижена), но пользователь уже среагировал.
+        bool correctionGivenInResponse = latestGlucoseAtUtc is { } readingAt
+            && bolusInjections.Any(b => b.InjectedAtUtc >= readingAt
+                && (nowUtc - b.InjectedAtUtc).TotalHours >= 0
+                && (nowUtc - b.InjectedAtUtc).TotalHours <= recentBolusHours);
+        if (correctionGivenInResponse)
+            return new GlucoseAlert(GlucoseAlertKind.CorrectionDone, latestGlucose, null);
 
         // Критически высокий — пробивает грубую блокировку по времени и предстоящий плановый
         // болюс: без коэффициентов терапии нельзя достоверно оценить, покрыл ли недавний болюс

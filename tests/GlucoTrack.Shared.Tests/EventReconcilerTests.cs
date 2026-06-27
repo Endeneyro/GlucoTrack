@@ -192,4 +192,38 @@ public class EventReconcilerTests
 
         Assert.Empty(hidden);
     }
+
+    [Fact]
+    public void HiddenRecordIds_LinkedEventCovered_OtherNearbyReadingNotHidden()
+    {
+        // Выполненное событие связано с замером R1; отдельный более поздний замер R2 в пределах
+        // ±15 мин не должен скрываться — он не относится к этому событию.
+        var evId = Guid.NewGuid();
+        var r1 = Guid.NewGuid(); // фактический замер события (по ссылке)
+        var r2 = Guid.NewGuid(); // другой замер через 7 минут
+        var hidden = EventReconciler.HiddenRecordIds(
+            new[] { Reading(r1, T, evId), Reading(r2, T.AddMinutes(7), null) },
+            r => r.Id, r => r.LinkedEventId, r => r.MeasuredAtUtc,
+            new[] { GlucoseEvent(evId, done: true, at: T) });
+
+        Assert.Contains(r1, hidden);
+        Assert.DoesNotContain(r2, hidden); // ← раньше скрывался по проксимити (баг)
+    }
+
+    [Fact]
+    public void HiddenRecordIds_NoLink_ProximityHidesOnlyNearest()
+    {
+        // Событие без явной ссылки: из нескольких замеров в окне прячем только ближайший,
+        // остальные (другие реальные замеры) остаются в дневнике.
+        var evId = Guid.NewGuid();
+        var nearest = Guid.NewGuid(); // в момент события
+        var other   = Guid.NewGuid(); // через 7 минут
+        var hidden = EventReconciler.HiddenRecordIds(
+            new[] { Reading(nearest, T, null), Reading(other, T.AddMinutes(7), null) },
+            r => r.Id, r => r.LinkedEventId, r => r.MeasuredAtUtc,
+            new[] { GlucoseEvent(evId, done: true, at: T) });
+
+        Assert.Contains(nearest, hidden);
+        Assert.DoesNotContain(other, hidden);
+    }
 }

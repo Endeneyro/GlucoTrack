@@ -173,4 +173,90 @@ public class GlucoseAlertDeciderTests
         var result = GlucoseAlertDecider.Decide(25.0, TargetHigh, new[] { Bolus(0.5) }, [], Now);
         Assert.Equal(GlucoseAlertKind.Critical, result.Kind);
     }
+
+    // ── Коррекция введена в ответ на замер (болюс после времени замера) ─────────────────────
+
+    private static InsulinInjectionDto BolusAt(DateTime atUtc, double units = 4) =>
+        new(Guid.NewGuid(), atUtc, units, (int)InsulinType.Bolus, null, null, Now, false);
+
+    [Fact]
+    public void CorrectionAfterCriticalReading_Acknowledged()
+    {
+        // Сахар критический 18.0, замер 5 мин назад, в ответ только что введён болюс →
+        // не кричим «коли сейчас», а подтверждаем ввод (CorrectionDone), даже без коэффициентов.
+        var readingAt = Now.AddMinutes(-5);
+        var result = GlucoseAlertDecider.Decide(18.0, TargetHigh, new[] { BolusAt(Now) }, [], Now,
+            latestGlucoseAtUtc: readingAt);
+        Assert.Equal(GlucoseAlertKind.CorrectionDone, result.Kind);
+    }
+
+    [Fact]
+    public void BolusBeforeReading_NotAcknowledged_StillCritical()
+    {
+        // Болюс введён ДО замера (доза на еду), а сахар после него критический 18.0 —
+        // это не ответ на замер, предупреждение обязано сработать.
+        var readingAt = Now.AddMinutes(-5);
+        var result = GlucoseAlertDecider.Decide(18.0, TargetHigh, new[] { BolusAt(Now.AddMinutes(-30)) }, [], Now,
+            latestGlucoseAtUtc: readingAt);
+        Assert.Equal(GlucoseAlertKind.Critical, result.Kind);
+    }
+
+    [Fact]
+    public void CorrectionAfterHighReading_Acknowledged()
+    {
+        // Некритический высокий 12.0: коррекция, введённая в ответ на замер, тоже подтверждается
+        // (иначе показалась бы рекомендация Correction).
+        var readingAt = Now.AddMinutes(-5);
+        var result = GlucoseAlertDecider.Decide(12.0, TargetHigh, new[] { BolusAt(Now) }, [], Now,
+            latestGlucoseAtUtc: readingAt);
+        Assert.Equal(GlucoseAlertKind.CorrectionDone, result.Kind);
+    }
+
+    // ── Гипогликемия (низкий сахар) ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void BelowTargetLow_Low()
+    {
+        // 3.5 < 3.9 (нижняя норма), но выше тяжёлого порога 3.0 → обычная гипо.
+        Assert.Equal(GlucoseAlertKind.Low, Decide(3.5).Kind);
+    }
+
+    [Fact]
+    public void SevereLow_CriticalLow()
+    {
+        // 2.5 ≤ 3.0 → тяжёлая гипогликемия (как в баг-репорте: раньше считалось «нормой»).
+        Assert.Equal(GlucoseAlertKind.CriticalLow, Decide(2.5).Kind);
+    }
+
+    [Fact]
+    public void LowBoundary_AtTargetLow_NotHypo()
+    {
+        // Ровно 3.9 — это уже норма (строгое «<»), а не гипо.
+        Assert.Equal(GlucoseAlertKind.None, Decide(3.9).Kind);
+    }
+
+    [Fact]
+    public void CriticalLowBoundary_AtThreshold_CriticalLow()
+    {
+        // Ровно 3.0 — тяжёлая гипо (порог включительно).
+        Assert.Equal(GlucoseAlertKind.CriticalLow, Decide(3.0).Kind);
+    }
+
+    [Fact]
+    public void Hypo_TakesPriorityOverInsulinAndEvents()
+    {
+        // Низкий сахар важнее всего: даже при недавнем болюсе и плановом инсулине показываем гипо.
+        var result = GlucoseAlertDecider.Decide(2.5, TargetHigh, new[] { Bolus(0.5) },
+            new[] { PlannedInsulin(30) }, Now,
+            correctionTarget: 6.0, insulinSensitivityFactor: 2.0);
+        Assert.Equal(GlucoseAlertKind.CriticalLow, result.Kind);
+    }
+
+    [Fact]
+    public void Hypo_RespectsCustomTargetLow()
+    {
+        // При нижней границе 4.5 значение 4.2 уже считается гипо.
+        var result = GlucoseAlertDecider.Decide(4.2, TargetHigh, [], [], Now, targetLow: 4.5);
+        Assert.Equal(GlucoseAlertKind.Low, result.Kind);
+    }
 }

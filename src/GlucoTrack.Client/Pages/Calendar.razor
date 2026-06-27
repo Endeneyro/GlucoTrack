@@ -72,7 +72,37 @@
             Дневник дня · @_selected.ToString("d MMMM", _ru)
         </div>
 
-        @if (_criticalGlucose.HasValue && _selected == DateOnly.FromDateTime(DateTime.Today))
+        @if (_criticalLowGlucose.HasValue && _selected == DateOnly.FromDateTime(DateTime.Today))
+        {
+            <div style="background:#FEF2F2;border:2px solid #DC2626;border-radius:var(--r-md);padding:.75rem 1rem;margin-bottom:1rem;display:flex;align-items:center;gap:.75rem">
+                <span style="font-size:1.3rem">🚨</span>
+                <div style="flex:1;font-size:.875rem">
+                    <div style="font-weight:700;color:#991B1B">Глюкоза @_criticalLowGlucose.Value.ToString("F1") ммоль/л — тяжёлая гипогликемия</div>
+                    <div style="color:#B91C1C">Немедленно примите быстрые углеводы (сок, глюкоза, сахар — 15–20 г). Если не можете глотать или теряете сознание — нужна помощь / глюкагон. Инсулин не вводить. Перемерьте через 15 минут.</div>
+                </div>
+            </div>
+        }
+        else if (_lowGlucose.HasValue && _selected == DateOnly.FromDateTime(DateTime.Today))
+        {
+            <div style="background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:var(--r-md);padding:.75rem 1rem;margin-bottom:1rem;display:flex;align-items:center;gap:.75rem">
+                <span style="font-size:1.3rem">⚠️</span>
+                <div style="flex:1;font-size:.875rem">
+                    <div style="font-weight:600;color:#92400E">Глюкоза @_lowGlucose.Value.ToString("F1") ммоль/л — ниже нормы (гипогликемия)</div>
+                    <div style="color:#B45309">Съешьте ~15 г быстрых углеводов (сок, глюкоза, сахар). Инсулин сейчас не вводить. Перемерьте через 15 минут.</div>
+                </div>
+            </div>
+        }
+        else if (_correctionDoneGlucose.HasValue && _selected == DateOnly.FromDateTime(DateTime.Today))
+        {
+            <div style="background:#F0FDF4;border:1.5px solid #86EFAC;border-radius:var(--r-md);padding:.75rem 1rem;margin-bottom:1rem;display:flex;align-items:center;gap:.75rem">
+                <span style="font-size:1.3rem">✅</span>
+                <div style="flex:1;font-size:.875rem">
+                    <div style="font-weight:600;color:#166534">Коррекция введена — сахар был @_correctionDoneGlucose.Value.ToString("F1") ммоль/л</div>
+                    <div style="color:#15803D">Инсулин уже на борту, повторный укол не нужен — дайте дозе подействовать. Перемерьте сахар через ~1 час.</div>
+                </div>
+            </div>
+        }
+        else if (_criticalGlucose.HasValue && _selected == DateOnly.FromDateTime(DateTime.Today))
         {
             <div style="background:#FEF2F2;border:1.5px solid #F87171;border-radius:var(--r-md);padding:.75rem 1rem;margin-bottom:1rem;display:flex;align-items:center;gap:.75rem">
                 <span style="font-size:1.3rem">🚨</span>
@@ -262,6 +292,9 @@
     private double? _alertGlucose;   // set when glucose > target and no recent insulin
     private double? _criticalGlucose; // set when glucose is critically high (correct now, delay meal)
     private TimeOnly? _pendingBolusTime; // set when glucose high but a planned bolus is imminent
+    private double? _correctionDoneGlucose; // set when a correction was already given for this reading
+    private double? _lowGlucose;          // set when glucose below target (hypoglycemia)
+    private double? _criticalLowGlucose;  // set when glucose is severely low (life-threatening)
 
     protected override async Task OnInitializedAsync()
     {
@@ -323,6 +356,10 @@
                 var type = (PlannedEventType)ev.EventType;
                 string? resultText = null;
                 double? mealProt = null, mealFat = null, mealCarbs = null;
+                // Событие может остаться IsDone=true, но реальная запись-основание была удалена
+                // (или потеряна при синке). Тогда не показываем «пустое готово», а считаем событие
+                // невыполненным — чтобы пользователь мог ввести замер/дозу заново.
+                bool effectiveDone = ev.IsDone;
 
                 if (ev.IsDone)
                 {
@@ -339,7 +376,10 @@
                             ?? glucoseAll.Where(g => Math.Abs((g.MeasuredAtUtc.ToLocalTime() - evLocal).TotalMinutes) <= 15)
                                          .OrderBy(g => Math.Abs((g.MeasuredAtUtc.ToLocalTime() - evLocal).TotalMinutes))
                                          .FirstOrDefault();
-                        resultText = found is not null ? $"{found.ValueMmol:F1} ммоль/л" : null;
+                        if (found is not null)
+                            resultText = $"{found.ValueMmol:F1} ммоль/л";
+                        else
+                            effectiveDone = false; // замер удалён — событие снова невыполненное
                     }
                     else if (type == PlannedEventType.Insulin)
                     {
@@ -357,6 +397,8 @@
                             var typeLabel = (GlucoTrack.Shared.Entities.InsulinType)found.InsulinType == GlucoTrack.Shared.Entities.InsulinType.Bolus ? "болюс" : "базал";
                             resultText = $"{totalUnits:F1} ЕД · {typeLabel}";
                         }
+                        else
+                            effectiveDone = false; // инъекция удалена — событие снова невыполненное
                     }
                     else
                     {
@@ -384,7 +426,7 @@
                 _diaryItems.Add(new DiaryItem(
                     ev.PlannedAtUtc.ToLocalTime(),
                     PlannedEventMeta.Label(type), sub,
-                    true, ev.IsDone, ev.Id, (int)type, resultText,
+                    true, effectiveDone, ev.Id, (int)type, resultText,
                     IsInsulinBolus: type == PlannedEventType.Insulin ? (ev.InsulinSubtype ?? 0) == 0 : null,
                     Protein: mealProt, Fat: mealFat, Carbs: mealCarbs));
             }
@@ -466,10 +508,14 @@
         _alertGlucose = null;
         _pendingBolusTime = null;
         _criticalGlucose = null;
+        _correctionDoneGlucose = null;
+        _lowGlucose = null;
+        _criticalLowGlucose = null;
         if (_selected == DateOnly.FromDateTime(DateTime.Today) && glucoseAll.Count > 0)
         {
             var settings = (await Db.GetAllAsync<UserSettingsDto>("settings")).FirstOrDefault();
             double target = settings?.TargetGlucoseHigh ?? 10.0;
+            double targetLow = settings?.TargetGlucoseLow > 0 ? settings.TargetGlucoseLow : GlucoseAlertDecider.DefaultTargetLowMmol;
             // MeasuredAtUtc can tie (same-minute entries) — UpdatedAtUtc (real save time) breaks
             // the tie deterministically, so the truly last-entered reading wins.
             var latest = glucoseAll.OrderByDescending(g => g.MeasuredAtUtc).ThenByDescending(g => g.UpdatedAtUtc).First();
@@ -488,9 +534,17 @@
             var alert = GlucoseAlertDecider.Decide(latest.ValueMmol, target, insulinAll, allEvents, DateTime.UtcNow,
                 correctionTarget: settings?.TargetGlucose,
                 insulinSensitivityFactor: coeff?.InsulinSensitivityFactor,
-                diaHours: settings?.DiaHours > 0 ? settings.DiaHours : GlucoTrack.Shared.Calculations.InsulinOnBoard.DefaultDiaHours);
+                diaHours: settings?.DiaHours > 0 ? settings.DiaHours : GlucoTrack.Shared.Calculations.InsulinOnBoard.DefaultDiaHours,
+                latestGlucoseAtUtc: latest.MeasuredAtUtc,
+                targetLow: targetLow);
             switch (alert.Kind)
             {
+                case GlucoseAlertKind.CriticalLow:
+                    _criticalLowGlucose = alert.Glucose;
+                    break;
+                case GlucoseAlertKind.Low:
+                    _lowGlucose = alert.Glucose;
+                    break;
                 case GlucoseAlertKind.Critical:
                     _criticalGlucose = alert.Glucose;
                     break;
@@ -499,6 +553,9 @@
                     break;
                 case GlucoseAlertKind.Correction:
                     _alertGlucose = alert.Glucose;
+                    break;
+                case GlucoseAlertKind.CorrectionDone:
+                    _correctionDoneGlucose = alert.Glucose;
                     break;
             }
         }

@@ -2,6 +2,7 @@
 @attribute [Authorize]
 @using GlucoTrack.Client.Models
 @using GlucoTrack.Shared.DTOs.Sync
+@using GlucoTrack.Shared.Events
 @inject DbService Db
 @inject SyncService Sync
 @inject NavigationManager Nav
@@ -199,5 +200,9 @@
     }
 
     private string GlucoseClass(double v) => v < _gLow ? "g-low" : v > _gHigh ? "g-high" : "g-ok";
-    private string GlucoseLabel(double v) => v < _gLow ? "Ниже нормы" : v > _gHigh ? "Выше нормы" : "В норме";
+    private string GlucoseLabel(double v) =>
+        v < _gLow ? "Ниже нормы"
+        : v >= GlucoseAlertDecider.CriticalGlucoseMmol ? "Критически высокая"
+        : v > _gHigh ? "Выше нормы"
+        : "В норме";
 }

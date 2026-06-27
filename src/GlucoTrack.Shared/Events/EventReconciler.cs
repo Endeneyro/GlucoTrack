@@ -48,28 +48,45 @@ public static class EventReconciler
         IEnumerable<PlannedEventDto> doneEvents,
         double windowMinutes = 15)
     {
+        var recordList = records.ToList();
         var result = new HashSet<Guid>();
         var doneList = doneEvents.Where(e => !e.IsDeleted && e.IsDone).ToList();
         var doneEventIds = doneList.Select(e => e.Id).ToHashSet();
 
-        foreach (var r in records)
+        // 1) Явная ссылка: прячем записи, указывающие на выполненное событие, и помечаем такие
+        //    события «покрытыми» — для них проксимити-фоллбэк уже не нужен.
+        var coveredEventIds = new HashSet<Guid>();
+        foreach (var r in recordList)
         {
             var linkedId = getLinkedEventId(r);
             if (linkedId.HasValue && doneEventIds.Contains(linkedId.Value))
             {
                 result.Add(getId(r));
-                continue;
+                coveredEventIds.Add(linkedId.Value);
             }
+        }
 
-            // Fallback: proximity window for records created before LinkedEventId existed
-            foreach (var ev in doneList)
+        // 2) Проксимити-фоллбэк (для старых записей без LinkedEventId) — только для событий,
+        //    которые ещё не покрыты явной ссылкой, и прячем РОВНО ОДНУ ближайшую запись в окне.
+        //    Иначе другой, более поздний замер рядом с выполненным событием ошибочно скрывается.
+        foreach (var ev in doneList)
+        {
+            if (coveredEventIds.Contains(ev.Id)) continue;
+
+            T? best = default;
+            double bestDiff = double.MaxValue;
+            foreach (var r in recordList)
             {
-                if (Math.Abs((getTimeUtc(r) - ev.PlannedAtUtc).TotalMinutes) <= windowMinutes)
+                if (result.Contains(getId(r))) continue; // уже скрыта другой ссылкой/событием
+                var diff = Math.Abs((getTimeUtc(r) - ev.PlannedAtUtc).TotalMinutes);
+                if (diff <= windowMinutes && diff < bestDiff)
                 {
-                    result.Add(getId(r));
-                    break;
+                    bestDiff = diff;
+                    best = r;
                 }
             }
+            if (best is not null)
+                result.Add(getId(best));
         }
         return result;
     }
