@@ -6,6 +6,7 @@
 @inject DbService Db
 @inject SyncService Sync
 @inject ModuleService Modules
+@inject ConfirmService Confirm
 
 <PageTitle>Профиль — GlucoTrack</PageTitle>
 
@@ -109,10 +110,6 @@
                     <input class="form-control" type="number" @bind="_carbs" />
                 </div>
             </div>
-            <div class="form-group" style="max-width:200px;margin-top:.25rem">
-                <label>Граммов на 1 ХЕ</label>
-                <input class="form-control" type="number" step="0.5" @bind="_xe" />
-            </div>
             <div style="margin-top:1rem">
                 <button class="btn btn-primary btn-sm" @onclick="SaveSettingsAsync" disabled="@_savingSettings">
                     @(_savingSettings ? "Сохранение..." : "Сохранить")
@@ -121,6 +118,28 @@
                 { <span style="margin-left:.75rem;font-size:.82rem;color:var(--c-success)">@_settingsMsg</span> }
             </div>
         </div>
+
+        @* ── Хлебные единицы (ХЕ) — только для диабетиков ── *@
+        @if (!string.IsNullOrEmpty(_diabetesType))
+        {
+            <div class="home-card" style="margin-bottom:1rem">
+                <div class="home-card-title">Хлебные единицы (ХЕ)</div>
+                <p style="font-size:.82rem;color:var(--c-text-muted);margin-bottom:.75rem">
+                    Сколько граммов углеводов считать за 1 ХЕ. Используется в дневнике и калькуляторе болюса.
+                </p>
+                <div class="form-group" style="max-width:200px">
+                    <label>Граммов на 1 ХЕ</label>
+                    <input class="form-control" type="number" step="0.5" @bind="_xe" />
+                </div>
+                <div style="margin-top:1rem">
+                    <button class="btn btn-primary btn-sm" @onclick="SaveSettingsAsync" disabled="@_savingSettings">
+                        @(_savingSettings ? "Сохранение..." : "Сохранить")
+                    </button>
+                    @if (_settingsMsg is not null)
+                    { <span style="margin-left:.75rem;font-size:.82rem;color:var(--c-success)">@_settingsMsg</span> }
+                </div>
+            </div>
+        }
 
         <!-- ── Цели по глюкозе ───────────────────────────────────────── -->
         <div class="home-card" style="margin-bottom:1rem">
@@ -139,19 +158,6 @@
                     <input class="form-control" type="number" step="0.1" @bind="_gTarget" />
                 </div>
             </div>
-            <div class="form-group" style="margin-top:1rem;max-width:320px">
-                <label>
-                    Время действия инсулина (DIA), ч
-                    <span style="font-size:.78rem;color:var(--c-text-muted);font-weight:400"> — 3–5 ч, обычно 4 ч</span>
-                </label>
-                <div style="display:flex;align-items:center;gap:.75rem">
-                    <input type="range" min="3" max="5" step="0.5" @bind="_diaHours" style="flex:1" />
-                    <span style="font-weight:600;min-width:2rem">@_diaHours.ToString("F1") ч</span>
-                </div>
-                <div style="font-size:.78rem;color:var(--c-text-muted);margin-top:.25rem">
-                    Влияет на расчёт активного инсулина (IOB). Дети: 3 ч, взрослые с резистентностью: до 5 ч.
-                </div>
-            </div>
             <div style="margin-top:1rem">
                 <button class="btn btn-primary btn-sm" @onclick="SaveSettingsAsync" disabled="@_savingSettings">
                     @(_savingSettings ? "Сохранение..." : "Сохранить")
@@ -165,132 +171,185 @@
         <div class="home-card" style="margin-bottom:1rem">
             <div class="home-card-title">Мои инсулины</div>
 
-            @if (_insulins.Count > 0)
+            @{ var actBolus = ActiveInsulin(0); var actBasal = ActiveInsulin(1); }
+            @if (_insulins.All(i => i.IsDeleted))
             {
-                <div style="display:flex;flex-direction:column;gap:.5rem;margin-bottom:1rem">
-                    @foreach (var ins in _insulins.Where(i => !i.IsDeleted).OrderBy(i => i.InsulinType).ThenBy(i => i.Name))
+                <p style="font-size:.875rem;color:var(--c-text-muted);margin-bottom:.75rem">Инсулины не добавлены.</p>
+                <button class="btn btn-ghost btn-sm" @onclick="() => OpenAddInsulin(0)">+ Добавить инсулин</button>
+            }
+            else
+            {
+                <div style="display:flex;flex-direction:column;gap:.75rem">
+                    @* ── Активный короткий (болюс) ── *@
+                    @if (actBolus is not null)
                     {
-                        <div style="display:flex;align-items:center;gap:.75rem;padding:.6rem .75rem;background:var(--c-bg-secondary);border-radius:var(--r-md)">
-                            <span style="font-size:.72rem;padding:.15rem .5rem;border-radius:999px;background:@(ins.InsulinType == 0 ? "#3B82F6" : "#8B5CF6");color:#fff">
-                                @(ins.InsulinType == 0 ? "болюс" : "базал")
-                            </span>
-                            <span style="flex:1;font-weight:600;font-size:.9rem">@ins.Name</span>
-                            @if (ins.TypicalDose.HasValue)
-                            {
-                                <span style="font-size:.8rem;color:var(--c-text-muted)">
-                                    @(ins.InsulinType == 0 ? "типично" : "суточная доза"):
-                                    @ins.TypicalDose.Value.ToString("F1") ЕД
-                                </span>
-                            }
-                            @if (!string.IsNullOrEmpty(ins.Note))
-                            {
-                                <span style="font-size:.78rem;color:var(--c-text-muted)">· @ins.Note</span>
-                            }
-                            @if (!ins.IsActive)
-                            {
-                                <span style="font-size:.72rem;color:var(--c-text-muted)">[неактивен]</span>
-                            }
-                            <button class="btn btn-ghost btn-icon btn-sm" @onclick="() => StartEditInsulin(ins)">✏️</button>
-                            <button class="btn btn-ghost btn-icon btn-sm" @onclick="() => DeleteInsulinAsync(ins)">🗑</button>
+                        <div @onclick="() => OpenInsulinModal(0)"
+                             style="cursor:pointer;padding:.7rem .8rem;background:var(--c-bg-secondary);border-radius:var(--r-md);border:1px solid var(--c-border)">
+                            <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.4rem">
+                                <span style="font-size:.72rem;padding:.15rem .5rem;border-radius:999px;background:#3B82F6;color:#fff">короткий</span>
+                                <span style="flex:1;font-weight:600;font-size:.95rem">@actBolus.Name</span>
+                                @if (actBolus.TypicalDose.HasValue)
+                                { <span style="font-size:.78rem;color:var(--c-text-muted)">типично @actBolus.TypicalDose.Value.ToString("F1") ЕД</span> }
+                                <span style="font-size:.74rem;color:var(--c-primary);white-space:nowrap">сменить ›</span>
+                            </div>
+                            <div style="font-size:.72rem;color:var(--c-text-muted);margin-bottom:.15rem">
+                                DIA @actBolus.DiaHours.ToString("0.0", Inv) ч · пик @FormatMinutes(actBolus.PeakMinutes)
+                            </div>
+                            @InsulinCurveSvg(actBolus.DiaHours, actBolus.PeakMinutes, $"iobGrad-{actBolus.Id:N}", 82, fullWidth: true)
                         </div>
+                    }
+                    else
+                    {
+                        <button class="btn btn-ghost btn-sm" @onclick="() => OpenAddInsulin(0)">+ Добавить короткий инсулин</button>
+                    }
+
+                    @* ── Активный длинный (базал) ── *@
+                    @if (actBasal is not null)
+                    {
+                        <div @onclick="() => OpenInsulinModal(1)"
+                             style="cursor:pointer;padding:.7rem .8rem;background:var(--c-bg-secondary);border-radius:var(--r-md);border:1px solid var(--c-border);display:flex;align-items:center;gap:.6rem">
+                            <span style="font-size:.72rem;padding:.15rem .5rem;border-radius:999px;background:#8B5CF6;color:#fff">длинный</span>
+                            <span style="flex:1;font-weight:600;font-size:.95rem">@actBasal.Name</span>
+                            @if (actBasal.TypicalDose.HasValue)
+                            { <span style="font-size:.78rem;color:var(--c-text-muted)">суточная @actBasal.TypicalDose.Value.ToString("F1") ЕД</span> }
+                            <span style="font-size:.74rem;color:var(--c-primary);white-space:nowrap">сменить ›</span>
+                        </div>
+                    }
+                    else
+                    {
+                        <button class="btn btn-ghost btn-sm" @onclick="() => OpenAddInsulin(1)">+ Добавить длинный инсулин</button>
                     }
                 </div>
             }
-            else
-            {
-                <p style="font-size:.875rem;color:var(--c-text-muted);margin-bottom:1rem">Инсулины не добавлены.</p>
-            }
 
-            <!-- Форма добавления/редактирования -->
-            @if (_editingInsulin)
-            {
-                <div style="border:1.5px solid var(--c-primary);border-radius:var(--r-md);padding:.875rem;margin-bottom:.5rem">
-                    <div style="font-weight:600;font-size:.875rem;margin-bottom:.75rem">
-                        @(_editInsulinId == Guid.Empty ? "Добавить инсулин" : "Редактировать")
+        </div>
+
+        @* ── Модалка управления инсулинами (список / форма) ── *@
+        @if (_insModalOpen)
+        {
+            <div class="modal-backdrop" @onclick="CloseInsulinModal">
+                <div class="modal-card modal-card-wide" @onclick:stopPropagation="true" style="max-width:560px">
+                    <div class="modal-header">
+                        <span class="modal-title">
+                            @(_insModalForm
+                                ? (_editInsulinId == Guid.Empty ? "Добавить инсулин" : "Редактировать инсулин")
+                                : (_insModalType == 0 ? "Короткий инсулин" : "Длинный инсулин"))
+                        </span>
+                        <button class="modal-close" @onclick="CloseInsulinModal">✕</button>
                     </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
-                        <div class="form-group" style="grid-column:1/-1">
-                            <label>Название *</label>
-                            <input class="form-control" type="text" placeholder="НовоРапид, Лантус..." @bind="_insName" />
-                        </div>
-                        <div class="form-group">
-                            <label>Тип</label>
-                            <select class="form-control" @bind="_insType">
-                                <option value="0">Болюс (короткий)</option>
-                                <option value="1">Базал (длинный)</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>@(_insType == 0 ? "Типичная доза болюса (ЕД)" : "Суточная доза базала (ЕД)")</label>
-                            <input class="form-control" type="number" min="0" step="0.5" @bind="_insDose" placeholder="необязательно" />
-                        </div>
-                        @if (_insType == 0)
-                        {
-                            <div style="grid-column:1/-1;border-top:1px dashed var(--c-border);padding-top:.75rem;margin-top:.25rem">
-                                <div style="font-weight:600;font-size:.82rem;margin-bottom:.6rem">Профиль действия (кривая IOB)</div>
-                                <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
-                                    <div class="form-group" style="margin:0;grid-column:1/-1">
-                                        <label>Препарат</label>
-                                        <select class="form-control" @bind="_insBrand" @bind:after="OnInsulinBrandChanged">
-                                            <option value="0">Другой / вручную</option>
-                                            <option value="1">Fiasp</option>
-                                            <option value="2">Lyumjev</option>
-                                            <option value="3">Humalog</option>
-                                            <option value="4">NovoRapid</option>
-                                            <option value="5">Apidra</option>
-                                        </select>
-                                    </div>
-                                    <div class="form-group" style="margin:0">
-                                        <label>DIA: @_insDia.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) ч</label>
-                                        <input type="range" min="2" max="8" step="0.25" @bind="_insDia" @bind:event="oninput" style="width:100%" />
-                                    </div>
-                                    <div class="form-group" style="margin:0">
-                                        <label>Пик: @FormatMinutes(_insPeak)</label>
-                                        <input type="range" min="30" max="120" step="5" @bind="_insPeak" @bind:event="oninput" style="width:100%" />
-                                    </div>
+
+                    @if (!_insModalForm)
+                    {
+                        @* Режим списка: выбрать активный / редактировать / удалить *@
+                        <div class="modal-tab-body">
+                            @{ var modalList = InsulinsOfType(_insModalType).ToList(); }
+                            @if (modalList.Count == 0)
+                            {
+                                <p style="font-size:.875rem;color:var(--c-text-muted)">Нет сохранённых инсулинов этого типа.</p>
+                            }
+                            else
+                            {
+                                <div style="display:flex;flex-direction:column;gap:.4rem">
+                                    @foreach (var ins in modalList)
+                                    {
+                                        <div @onclick="() => SetActiveAsync(ins)"
+                                             style="display:flex;align-items:center;gap:.5rem;padding:.55rem .7rem;border-radius:var(--r-md);cursor:pointer;background:@(ins.IsActive ? "var(--c-bg-secondary)" : "transparent");border:1.5px solid @(ins.IsActive ? "var(--c-primary)" : "var(--c-border)")">
+                                            <span style="width:1rem;color:var(--c-primary);font-weight:700">@(ins.IsActive ? "✓" : "")</span>
+                                            <span style="flex:1;font-weight:600;font-size:.9rem">@ins.Name</span>
+                                            @if (_insModalType == 0)
+                                            { <span style="font-size:.72rem;color:var(--c-text-muted);white-space:nowrap">DIA @ins.DiaHours.ToString("0.0", Inv) · пик @FormatMinutes(ins.PeakMinutes)</span> }
+                                            else if (ins.TypicalDose.HasValue)
+                                            { <span style="font-size:.72rem;color:var(--c-text-muted);white-space:nowrap">@ins.TypicalDose.Value.ToString("F1") ЕД</span> }
+                                            <button class="btn btn-ghost btn-icon btn-sm" @onclick:stopPropagation="true" @onclick="() => StartEditInsulinModal(ins)">
+                                                <img src="icons/edit.svg" width="18" height="18" />
+                                            </button>
+                                            <button class="btn btn-ghost btn-icon btn-sm" @onclick:stopPropagation="true" @onclick="() => DeleteInsulinModalAsync(ins)">
+                                                <img src="icons/deleted.svg" width="18" height="18" />
+                                            </button>
+                                        </div>
+                                    }
                                 </div>
-                                @{ var curve = BuildInsulinCurve(); }
-                                <svg viewBox="0 0 320 96" style="width:100%;height:96px;display:block;margin-top:.5rem;overflow:visible">
-                                    <defs>
-                                        <linearGradient id="iobGrad" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="0%" stop-color="var(--c-primary)" stop-opacity="0.30" />
-                                            <stop offset="100%" stop-color="var(--c-primary)" stop-opacity="0.02" />
-                                        </linearGradient>
-                                    </defs>
-                                    <line x1="8" y1="88" x2="312" y2="88" stroke="var(--c-border)" stroke-width="1" />
-                                    <path d="@curve.Area" fill="url(#iobGrad)" />
-                                    <path d="@curve.Line" fill="none" stroke="var(--c-primary)" stroke-width="2" stroke-linejoin="round" />
-                                    <line x1="@curve.PeakX" y1="6" x2="@curve.PeakX" y2="88" stroke="var(--c-primary)" stroke-width="1" stroke-dasharray="3 3" opacity="0.6" />
-                                </svg>
-                                <div style="font-size:.75rem;color:var(--c-text-muted);margin-top:.3rem">
-                                    Пик активности — на @FormatMinutes(_insPeak); к @_insDia.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) ч инсулин отрабатывает полностью.
+                            }
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-primary btn-sm" @onclick="() => OpenAddInsulin(_insModalType)">+ Добавить инсулин</button>
+                        </div>
+                    }
+                    else
+                    {
+                        @* Режим формы: добавление / редактирование *@
+                        <div class="modal-tab-body">
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+                                <div class="form-group" style="grid-column:1/-1">
+                                    <label>Название *</label>
+                                    <input class="form-control" type="text" placeholder="НовоРапид, Лантус..." @bind="_insName" />
+                                </div>
+                                <div class="form-group">
+                                    <label>Тип</label>
+                                    <select class="form-control" @bind="_insType">
+                                        <option value="0">Болюс (короткий)</option>
+                                        <option value="1">Базал (длинный)</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>@(_insType == 0 ? "Типичная доза болюса (ЕД)" : "Суточная доза базала (ЕД)")</label>
+                                    <input class="form-control" type="number" min="0" step="0.5" @bind="_insDose" placeholder="необязательно" />
+                                </div>
+                                @if (_insType == 0)
+                                {
+                                    <div style="grid-column:1/-1;border-top:1px dashed var(--c-border);padding-top:.75rem;margin-top:.25rem">
+                                        <div style="font-weight:600;font-size:.82rem;margin-bottom:.6rem">Профиль действия (кривая IOB)</div>
+                                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+                                            <div class="form-group" style="margin:0;grid-column:1/-1">
+                                                <label>Препарат</label>
+                                                <select class="form-control" @bind="_insBrand" @bind:after="OnInsulinBrandChanged">
+                                                    <option value="0">Другой / вручную</option>
+                                                    <option value="1">Fiasp</option>
+                                                    <option value="2">Lyumjev</option>
+                                                    <option value="3">Humalog</option>
+                                                    <option value="4">NovoRapid</option>
+                                                    <option value="5">Apidra</option>
+                                                </select>
+                                            </div>
+                                            <div class="form-group" style="margin:0">
+                                                <label>DIA: @_insDia.ToString("0.0", Inv) ч</label>
+                                                <input type="range" min="2" max="8" step="0.25" @bind="_insDia" @bind:event="oninput" style="width:100%" />
+                                            </div>
+                                            <div class="form-group" style="margin:0">
+                                                <label>Пик: @FormatMinutes(_insPeak)</label>
+                                                <input type="range" min="30" max="120" step="5" @bind="_insPeak" @bind:event="oninput" style="width:100%" />
+                                            </div>
+                                        </div>
+                                        <div style="margin-top:.5rem">
+                                            @InsulinCurveSvg(_insDia, _insPeak, "iobGradEdit", 116, fullWidth: true)
+                                        </div>
+                                        <div style="font-size:.75rem;color:var(--c-text-muted);margin-top:.3rem">
+                                            Пик активности — на @FormatMinutes(_insPeak); к @_insDia.ToString("0.0", Inv) ч инсулин отрабатывает полностью.
+                                        </div>
+                                    </div>
+                                }
+                                <div class="form-group" style="grid-column:1/-1">
+                                    <label>Заметка</label>
+                                    <input class="form-control" type="text" placeholder="Например: утром, или только по схеме..." @bind="_insNote" />
+                                </div>
+                                <div class="form-group" style="grid-column:1/-1;display:flex;align-items:center;gap:.5rem">
+                                    <input type="checkbox" id="ins-active" @bind="_insActive" />
+                                    <label for="ins-active" style="margin:0;cursor:pointer">Сделать активным сейчас</label>
                                 </div>
                             </div>
-                        }
-                        <div class="form-group" style="grid-column:1/-1">
-                            <label>Заметка</label>
-                            <input class="form-control" type="text" placeholder="Например: утром, или только по схеме..." @bind="_insNote" />
+                            @if (_insError is not null)
+                            { <div style="font-size:.82rem;color:var(--c-danger);margin-top:.25rem">@_insError</div> }
                         </div>
-                        <div class="form-group" style="grid-column:1/-1;display:flex;align-items:center;gap:.5rem">
-                            <input type="checkbox" id="ins-active" @bind="_insActive" />
-                            <label for="ins-active" style="margin:0;cursor:pointer">Активно использую сейчас</label>
+                        <div class="modal-footer">
+                            <button class="btn btn-ghost btn-sm" @onclick="BackToInsulinList">@(_editInsulinId == Guid.Empty && InsulinsOfType(_insModalType).Any() ? "Назад" : "Отмена")</button>
+                            <button class="btn btn-primary btn-sm" @onclick="SaveInsulinAsync" disabled="@_savingInsulin">
+                                @(_savingInsulin ? "..." : "Сохранить")
+                            </button>
                         </div>
-                    </div>
-                    @if (_insError is not null)
-                    { <div style="font-size:.82rem;color:var(--c-danger);margin-bottom:.5rem">@_insError</div> }
-                    <div style="display:flex;gap:.5rem">
-                        <button class="btn btn-primary btn-sm" @onclick="SaveInsulinAsync" disabled="@_savingInsulin">
-                            @(_savingInsulin ? "..." : "Сохранить")
-                        </button>
-                        <button class="btn btn-ghost btn-sm" @onclick="CancelInsulinEdit">Отмена</button>
-                    </div>
+                    }
                 </div>
-            }
-            else
-            {
-                <button class="btn btn-ghost btn-sm" @onclick="StartAddInsulin">+ Добавить инсулин</button>
-            }
-        </div>
+            </div>
+        }
 
         <!-- ── Коэффициенты терапии ─────────────────────────────────── -->
         <div class="home-card" style="margin-bottom:1rem">
@@ -451,8 +510,12 @@
     private string? _settingsMsg;
 
     // ── User insulins ─────────────────────────────────────────────────────────
+    private static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
     private List<UserInsulinDto> _insulins = [];
-    private bool _editingInsulin, _savingInsulin;
+    private bool _savingInsulin;
+    // Модалка: открыта? тип (0 болюс / 1 базал)? режим формы (иначе список)?
+    private bool _insModalOpen, _insModalForm;
+    private int _insModalType;
     private Guid _editInsulinId = Guid.Empty;
     private string _insName = "", _insNote = "";
     private int _insType = 0;
@@ -552,15 +615,37 @@
 
     // ── Insulin CRUD ──────────────────────────────────────────────────────────
 
-    private void StartAddInsulin()
+    // Активный инсулин типа: сначала помеченный IsActive, иначе первый доступный.
+    private UserInsulinDto? ActiveInsulin(int type)
+        => _insulins.Where(i => !i.IsDeleted && i.InsulinType == type)
+                    .OrderByDescending(i => i.IsActive).ThenBy(i => i.Name)
+                    .FirstOrDefault();
+
+    private IEnumerable<UserInsulinDto> InsulinsOfType(int type)
+        => _insulins.Where(i => !i.IsDeleted && i.InsulinType == type).OrderBy(i => i.Name);
+
+    private void OpenInsulinModal(int type)
     {
-        _editInsulinId = Guid.Empty; _insName = ""; _insNote = "";
-        _insType = 0; _insDose = null; _insActive = true; _insError = null;
-        _insBrand = 0; _insPeak = 75; _insDia = 4.0;
-        _editingInsulin = true;
+        _insModalType = type; _insModalForm = false; _insError = null; _insModalOpen = true;
     }
 
-    private void StartEditInsulin(UserInsulinDto ins)
+    private void CloseInsulinModal()
+    {
+        _insModalOpen = false; _insModalForm = false; _insError = null;
+    }
+
+    private void BackToInsulinList() { _insModalForm = false; _insError = null; }
+
+    private void OpenAddInsulin(int type)
+    {
+        _insModalType = type;
+        _editInsulinId = Guid.Empty; _insName = ""; _insNote = "";
+        _insType = type; _insDose = null; _insActive = true; _insError = null;
+        _insBrand = 0; _insPeak = 75; _insDia = 4.0;
+        _insModalForm = true; _insModalOpen = true;
+    }
+
+    private void StartEditInsulinModal(UserInsulinDto ins)
     {
         _editInsulinId = ins.Id; _insName = ins.Name; _insNote = ins.Note ?? "";
         _insType = ins.InsulinType; _insDose = ins.TypicalDose;
@@ -568,10 +653,31 @@
         _insBrand = ins.Brand;
         _insPeak = ins.PeakMinutes > 0 ? ins.PeakMinutes : 75;
         _insDia = ins.DiaHours > 0 ? ins.DiaHours : 4.0;
-        _editingInsulin = true;
+        _insModalForm = true;
     }
 
-    private void CancelInsulinEdit() { _editingInsulin = false; _insError = null; }
+    // Быстрая смена активного инсулина (эксклюзивно в рамках типа).
+    private async Task SetActiveAsync(UserInsulinDto ins)
+    {
+        if (ins.IsActive) { CloseInsulinModal(); return; }
+        var now = DateTime.UtcNow;
+        bool changed = false;
+        for (int i = 0; i < _insulins.Count; i++)
+        {
+            var cur = _insulins[i];
+            if (cur.IsDeleted || cur.InsulinType != ins.InsulinType) continue;
+            bool desired = cur.Id == ins.Id;
+            if (cur.IsActive != desired)
+            {
+                var upd = cur with { IsActive = desired, UpdatedAtUtc = now };
+                _insulins[i] = upd;
+                await Db.PutAsync("user_insulins", upd, pending: true);
+                changed = true;
+            }
+        }
+        if (changed) _ = Sync.SyncAsync();
+        CloseInsulinModal();
+    }
 
     // Смена бренда подставляет рекомендованный пик (пользователь может поправить вручную)
     private void OnInsulinBrandChanged()
@@ -584,18 +690,23 @@
         return m == 0 ? $"{h} ч" : $"{h} ч {m} мин";
     }
 
-    // Строит SVG-пути кривой АКТИВНОСТИ инсулина (−dIOB/dt) для текущих DIA/пика.
-    // Координаты — в инвариантной культуре (точка-разделитель), как требует SVG.
-    private (string Line, string Area, string PeakX) BuildInsulinCurve()
+    // Строит весь SVG кривой АКТИВНОСТИ инсулина (−dIOB/dt) с осями:
+    //   X — время (часы, тики по часам до DIA), Y — активность в % от пика (0/50/100).
+    // Возвращает готовую разметку; координаты — в инвариантной культуре (точка), как требует SVG.
+    private MarkupString InsulinCurveSvg(double diaHours, double peakMinutes, string gradId, double heightPx, bool fullWidth = false)
     {
         var inv = System.Globalization.CultureInfo.InvariantCulture;
-        double dia = _insDia > 0 ? _insDia : 4.0;
-        double peak = _insPeak > 0 ? _insPeak : 75;
+        double dia = diaHours > 0 ? diaHours : 4.0;
+        double peak = peakMinutes > 0 ? peakMinutes : 75;
         double end = dia * 60.0;
-        const double x0 = 8, x1 = 312, yTop = 6, yBase = 88;
-        double plotW = x1 - x0, plotH = yBase - yTop;
-        const int n = 64;
 
+        const double W = 340, H = 120;
+        const double x0 = 26, x1 = 328, y0 = 8, y1 = 102; // область графика
+        double pw = x1 - x0, ph = y1 - y0;
+        string F(double v) => v.ToString("0.#", inv);
+
+        // Сэмплируем активность и нормируем к максимуму (пик = 100%)
+        const int n = 64;
         var raw = new double[n + 1];
         double maxA = 1e-9;
         for (int i = 0; i <= n; i++)
@@ -604,55 +715,113 @@
             raw[i] = a;
             if (a > maxA) maxA = a;
         }
-
-        var line = new System.Text.StringBuilder();
+        var lb = new System.Text.StringBuilder();
         for (int i = 0; i <= n; i++)
         {
-            double x = x0 + plotW * i / n;
-            double y = yBase - raw[i] / maxA * plotH;
-            line.Append(i == 0 ? "M" : "L")
-                .Append(x.ToString("0.#", inv)).Append(' ')
-                .Append(y.ToString("0.#", inv)).Append(' ');
+            double x = x0 + pw * i / n;
+            double y = y1 - raw[i] / maxA * ph;
+            lb.Append(i == 0 ? "M" : "L").Append(F(x)).Append(' ').Append(F(y)).Append(' ');
         }
-        string l = line.ToString().TrimEnd();
-        string area = $"M{x0.ToString("0.#", inv)} {yBase.ToString("0.#", inv)} "
-                      + l.Substring(1)
-                      + $" L{x1.ToString("0.#", inv)} {yBase.ToString("0.#", inv)} Z";
-        double peakX = x0 + plotW * Math.Min(peak, end) / end;
-        return (l, area, peakX.ToString("0.#", inv));
+        string line = lb.ToString().TrimEnd();
+        string area = $"M{F(x0)} {F(y1)} " + line.Substring(1) + $" L{F(x1)} {F(y1)} Z";
+        double peakX = x0 + pw * Math.Min(peak, end) / end;
+
+        var sb = new System.Text.StringBuilder();
+        // fullWidth: тянем на всю ширину, высота пропорционально (без искажений);
+        // иначе — фиксированная высота в px (компактный вид для списка).
+        string svgStyle = fullWidth
+            ? "width:100%;height:auto;display:block;overflow:visible"
+            : $"width:100%;height:{F(heightPx)}px;display:block;overflow:visible";
+        sb.Append($"<svg viewBox=\"0 0 {F(W)} {F(H)}\" style=\"{svgStyle}\">");
+        sb.Append($"<defs><linearGradient id=\"{gradId}\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">"
+            + "<stop offset=\"0%\" stop-color=\"var(--c-primary)\" stop-opacity=\"0.28\"/>"
+            + "<stop offset=\"100%\" stop-color=\"var(--c-primary)\" stop-opacity=\"0.02\"/></linearGradient></defs>");
+
+        // Ось Y: гридлайны и подписи % от пика
+        var yvals = new[] { 1.0, 0.5, 0.0 };
+        var ylabels = new[] { "100%", "50", "0" };
+        for (int k = 0; k < yvals.Length; k++)
+        {
+            double gy = y1 - yvals[k] * ph;
+            sb.Append($"<line x1=\"{F(x0)}\" y1=\"{F(gy)}\" x2=\"{F(x1)}\" y2=\"{F(gy)}\" stroke=\"var(--c-border)\" stroke-width=\"0.75\" opacity=\"0.5\"/>");
+            sb.Append($"<text x=\"{F(x0 - 4)}\" y=\"{F(gy + 3)}\" text-anchor=\"end\" font-size=\"8\" fill=\"var(--c-text-muted)\">{ylabels[k]}</text>");
+        }
+
+        // Кривая
+        sb.Append($"<path d=\"{area}\" fill=\"url(#{gradId})\"/>");
+        sb.Append($"<path d=\"{line}\" fill=\"none\" stroke=\"var(--c-primary)\" stroke-width=\"2\" stroke-linejoin=\"round\"/>");
+
+        // Маркер пика
+        sb.Append($"<line x1=\"{F(peakX)}\" y1=\"{F(y0)}\" x2=\"{F(peakX)}\" y2=\"{F(y1)}\" stroke=\"var(--c-primary)\" stroke-width=\"1\" stroke-dasharray=\"3 3\" opacity=\"0.55\"/>");
+        sb.Append($"<text x=\"{F(peakX)}\" y=\"{F(y0 + 5)}\" text-anchor=\"middle\" font-size=\"8\" fill=\"var(--c-primary)\">пик</text>");
+
+        // Ось X: тики по часам + подпись endpoint = DIA
+        var ticks = new List<(double Hours, string Label)>();
+        int last = (int)Math.Floor(dia + 1e-9);
+        for (int h = 0; h <= last; h++) ticks.Add((h, h.ToString(inv)));
+        if (dia - last > 0.05)
+        {
+            if (dia - last < 0.3 && ticks.Count > 0) ticks.RemoveAt(ticks.Count - 1);
+            ticks.Add((dia, dia.ToString("0.0", inv)));
+        }
+        if (ticks.Count > 0) ticks[^1] = (ticks[^1].Hours, ticks[^1].Label + " ч");
+        foreach (var (h, lbl) in ticks)
+        {
+            double tx = x0 + pw * (h * 60.0) / end;
+            sb.Append($"<line x1=\"{F(tx)}\" y1=\"{F(y1)}\" x2=\"{F(tx)}\" y2=\"{F(y1 + 3)}\" stroke=\"var(--c-border)\" stroke-width=\"0.75\"/>");
+            sb.Append($"<text x=\"{F(tx)}\" y=\"{F(y1 + 13)}\" text-anchor=\"middle\" font-size=\"8\" fill=\"var(--c-text-muted)\">{lbl}</text>");
+        }
+
+        sb.Append("</svg>");
+        return new MarkupString(sb.ToString());
     }
 
     private async Task SaveInsulinAsync()
     {
         if (string.IsNullOrWhiteSpace(_insName)) { _insError = "Введите название инсулина"; return; }
         _savingInsulin = true; _insError = null;
+        var now = DateTime.UtcNow;
+        var id = _editInsulinId == Guid.Empty ? Guid.NewGuid() : _editInsulinId;
 
         var dto = new UserInsulinDto(
-            _editInsulinId == Guid.Empty ? Guid.NewGuid() : _editInsulinId,
-            _insName.Trim(), _insType, _insDose, _insActive,
+            id, _insName.Trim(), _insType, _insDose, _insActive,
             string.IsNullOrWhiteSpace(_insNote) ? null : _insNote.Trim(),
-            DateTime.UtcNow, false,
+            now, false,
             Brand: _insType == 0 ? _insBrand : 0,
             PeakMinutes: _insType == 0 ? _insPeak : 75,
             DiaHours: _insType == 0 ? _insDia : 4.0);
 
         await Db.PutAsync("user_insulins", dto, pending: true);
-        _ = Sync.SyncAsync();
-
         var idx = _insulins.FindIndex(i => i.Id == dto.Id);
-        if (idx >= 0) _insulins[idx] = dto;
-        else _insulins.Add(dto);
+        if (idx >= 0) _insulins[idx] = dto; else _insulins.Add(dto);
 
+        // Эксклюзивность: если этот активен — снять активность с остальных того же типа.
+        if (_insActive)
+        {
+            for (int i = 0; i < _insulins.Count; i++)
+            {
+                var cur = _insulins[i];
+                if (cur.IsDeleted || cur.Id == dto.Id || cur.InsulinType != _insType || !cur.IsActive) continue;
+                var off = cur with { IsActive = false, UpdatedAtUtc = now };
+                _insulins[i] = off;
+                await Db.PutAsync("user_insulins", off, pending: true);
+            }
+        }
+
+        _ = Sync.SyncAsync();
         _savingInsulin = false;
-        _editingInsulin = false;
+        _insModalType = _insType;   // показать список того типа, что сохранили
+        _insModalForm = false;      // вернуться к списку (модалка остаётся открытой)
     }
 
-    private async Task DeleteInsulinAsync(UserInsulinDto ins)
+    private async Task DeleteInsulinModalAsync(UserInsulinDto ins)
     {
+        if (!await Confirm.ConfirmAsync("Удалить инсулин?", ins.Name)) return;
         var deleted = ins with { IsDeleted = true, UpdatedAtUtc = DateTime.UtcNow };
         await Db.PutAsync("user_insulins", deleted, pending: true);
         _ = Sync.SyncAsync();
         _insulins.RemoveAll(i => i.Id == ins.Id);
+        // остаёмся в списке выбранного типа
     }
 
     // ── Therapy coefficients ──────────────────────────────────────────────────
